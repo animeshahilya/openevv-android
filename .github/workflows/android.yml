@@ -1,0 +1,47 @@
+name: Android Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    name: Build Android NDK Binaries
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a, x86_64, x86]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27b
+
+      - name: Build ABI (${{ matrix.abi }})
+        run: |
+          python3 tools/build_android.py --abi ${{ matrix.abi }}
+
+      - name: Verify 16KB ELF Page Alignment
+        run: |
+          $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -l build/android/${{ matrix.abi }}/libopenevv.so | grep "LOAD"
+
+      - name: Upload Binaries (${{ matrix.abi }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: openevv-android-${{ matrix.abi }}
+          path: |
+            build/android/${{ matrix.abi }}/libopenevv.so
+            build/android/${{ matrix.abi }}/evv
