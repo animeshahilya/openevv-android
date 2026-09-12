@@ -36,10 +36,12 @@ extern uint8_t st_protectInitialization[]
 extern char protectFirstTime[];
 extern char initializeStandardVoices[];
 
+#include "evv_port.h"
+
 /* A mutex that may not be taken twice by the same thread. */
 #define MUTEX_PLAIN 0
 
-void evvRunStaticInitialisers(void)
+EVV_PORT_EXPORT void evvRunStaticInitialisers(void)
 {
     initializeSoundFormats();
     sy_mutexCtor(fm_protectFilterLoad, MUTEX_PLAIN);

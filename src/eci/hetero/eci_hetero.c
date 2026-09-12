@@ -341,7 +341,7 @@ int hetero_isUsable(const char *text)
     return 1;
 }
 
-STDCALL int hetero_getFilterObject(uint32_t idInterface, void **out)
+HETERO_EXPORT STDCALL int hetero_getFilterObject(uint32_t idInterface, void **out)
 {
     void *object = 0;
 

@@ -7,10 +7,13 @@
 #ifndef ECI_HETERO_H
 #define ECI_HETERO_H
 
-#include <stdint.h>
-#include "evv_abi.h"
+#if defined(__GNUC__) || defined(__clang__)
+#define HETERO_EXPORT __attribute__((visibility("default")))
+#else
+#define HETERO_EXPORT
+#endif
 
-extern STDCALL int hetero_getFilterObject(uint32_t idInterface, void **out);
+extern HETERO_EXPORT STDCALL int hetero_getFilterObject(uint32_t idInterface, void **out);
 extern int hetero_isUsable(const char *text);
 
 /* Registers it and turns it on, which happens when an instance is made

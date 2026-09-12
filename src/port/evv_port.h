@@ -43,10 +43,17 @@ typedef struct evv_sem   evv_sem;
 typedef struct evv_event evv_event;
 typedef struct evv_task  evv_task;
 
+#if defined(__GNUC__) || defined(__clang__)
+#define EVV_PORT_EXPORT __attribute__((visibility("default")))
+#else
+#define EVV_PORT_EXPORT
+#endif
+
 /* Called once before anything else, and once after everything else. A
    target with nothing to set up may leave them empty. */
-void evv_port_start(void);
-void evv_port_finish(void);
+EVV_PORT_EXPORT void evv_port_start(void);
+EVV_PORT_EXPORT void evv_port_finish(void);
+EVV_PORT_EXPORT void evvRunStaticInitialisers(void);
 
 /* The one lock below everything else.
  *

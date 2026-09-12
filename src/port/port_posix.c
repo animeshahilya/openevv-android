@@ -39,8 +39,8 @@ void evv_low_unlock(void)
     pthread_mutex_unlock(&evv_low);
 }
 
-void evv_port_start(void) { }
-void evv_port_finish(void) { }
+EVV_PORT_EXPORT void evv_port_start(void) { }
+EVV_PORT_EXPORT void evv_port_finish(void) { }
 
 /* ---- telling the time ------------------------------------------------ */
 
