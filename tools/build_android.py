@@ -174,6 +174,7 @@ def build_abi(abi, ndk_root, debug=False):
         "-DDEBUG=1",
     ] if debug else [
         "-O3",
+        "-g",
         "-flto=thin",
         "-fno-math-errno",
         "-fno-trapping-math",
