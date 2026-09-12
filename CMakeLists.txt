@@ -14,6 +14,7 @@ endif()
 # hidden visibility for direct relative jumps, and fast-math flags for DSP vectorization
 add_compile_options(
     -O3
+    -flto=thin
     -fomit-frame-pointer
     -DEVV_ARENA=1
     -DECI_BUILDING=1
@@ -23,6 +24,9 @@ add_compile_options(
     -fno-math-errno
     -fno-trapping-math
     -ffp-contract=fast
+    -funroll-loops
+    -fvectorize
+    -fslp-vectorize
     -fPIC
     -w
     -Wno-implicit-function-declaration
@@ -30,9 +34,12 @@ add_compile_options(
     -Werror=incompatible-pointer-types
 )
 
-# Android 15+ 16KB ELF page size alignment
+# Android 15+ 16KB ELF page size alignment & link optimizations
 if(ANDROID)
     add_link_options(
+        -flto=thin
+        -Wl,-O3
+        -Wl,--icf=all
         -Wl,-z,max-page-size=16384
         -Wl,-z,common-page-size=16384
         -Wl,--gc-sections

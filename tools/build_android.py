@@ -174,9 +174,13 @@ def build_abi(abi, ndk_root, debug=False):
         "-DDEBUG=1",
     ] if debug else [
         "-O3",
+        "-flto=thin",
         "-fno-math-errno",
         "-fno-trapping-math",
         "-ffp-contract=fast",
+        "-funroll-loops",
+        "-fvectorize",
+        "-fslp-vectorize",
     ]
 
     common_cflags = [
@@ -210,7 +214,7 @@ def build_abi(abi, ndk_root, debug=False):
         return obj
 
     core_sources = src_files + lang_files
-    print(f"Compiling {len(core_sources)} core sources [{'DEBUG' if debug else '-O3 release'} + DSP optimizations]...")
+    print(f"Compiling {len(core_sources)} core sources [{'DEBUG' if debug else '-O3 release + ThinLTO + vectorization'}]...")
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 8) as ex:
         core_objs = list(ex.map(compile_source, core_sources))
 
@@ -232,6 +236,12 @@ def build_abi(abi, ndk_root, debug=False):
         "-Wl,-z,common-page-size=16384",
     ]
 
+    opt_link_flags = [] if debug else [
+        "-flto=thin",
+        "-Wl,-O3",
+        "-Wl,--icf=all",
+    ]
+
     out_eloquick = os.path.join(build_dir, "eloquick")
     out_evv = os.path.join(build_dir, "evv")
     print(f"Linking executable {out_eloquick}...")
@@ -247,7 +257,7 @@ def build_abi(abi, ndk_root, debug=False):
         "-o", out_eloquick,
         "-pie",
         "-Wl,--gc-sections",
-    ] + strip_flags + linker_alignment_flags + [
+    ] + strip_flags + opt_link_flags + linker_alignment_flags + [
         "-lm",
         "-pthread",
         f"@{cli_rsp}",
@@ -273,7 +283,7 @@ def build_abi(abi, ndk_root, debug=False):
         "-shared",
         "-Wl,-soname,libeloquick.so",
         "-Wl,--gc-sections",
-    ] + strip_flags + linker_alignment_flags + [
+    ] + strip_flags + opt_link_flags + linker_alignment_flags + [
         "-lm",
         "-pthread",
         f"@{so_rsp}",
@@ -289,7 +299,7 @@ def build_abi(abi, ndk_root, debug=False):
         "-shared",
         "-Wl,-soname,libopenevv.so",
         "-Wl,--gc-sections",
-    ] + strip_flags + linker_alignment_flags + [
+    ] + strip_flags + opt_link_flags + linker_alignment_flags + [
         "-lm",
         "-pthread",
         f"@{so_rsp}",

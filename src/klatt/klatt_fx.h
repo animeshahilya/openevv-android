@@ -54,7 +54,8 @@ EVV_INLINE int32_t fxmul_scaled(int32_t coef, int32_t x)
         /* |x|, without a branch and without overflowing on the most negative
            value. Nought cannot reach here. */
         uint32_t s = (uint32_t)(x >> 31);
-        int      pre = fx_pre[__builtin_clz(((uint32_t)x ^ s) - s) >> 2];
+        uint32_t lz = (uint32_t)__builtin_clz(((uint32_t)x ^ s) - s);
+        int      pre = (int)((0x0000000004080c0fULL >> ((lz >> 2) << 3)) & 0xff);
 
         return mul32(coef, x >> pre) >> (15 - pre);
     }
@@ -85,7 +86,12 @@ EVV_INLINE int32_t fxmul_scaled(int32_t coef, int32_t x)
 #endif
 }
 
-void     clr_vector(int32_t *v, int32_t n);
+#include <string.h>
+
+EVV_INLINE void clr_vector(int32_t *v, int32_t n)
+{
+    memset(v, 0, (size_t)n * sizeof(int32_t));
+}
 uint32_t klatt_rand(int16_t *out, int32_t n, uint32_t seed);
 void     klatt_shape_noise(int16_t *buf, int32_t n, int32_t rate, double *z);
 void     klatt_wide_enable(int32_t rate);

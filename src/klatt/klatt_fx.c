@@ -10,16 +10,26 @@
    rather than produce silently wrong audio on one that does not. */
 typedef char kfx_needs_arithmetic_shift[((int32_t)-8 >> 1) == -4 ? 1 : -1];
 
-void clr_vector(int32_t *v, int32_t n)
-{
-    memset(v, 0, (size_t)n * 4u);
-}
-
 uint32_t klatt_rand(int16_t *out, int32_t n, uint32_t seed)
 {
-    int32_t i;
+    int32_t i = 0;
 
-    for (i = 0; i < n; i++) {
+    for (; i + 3 < n; i += 4) {
+        seed = seed * 0x19660du + 0x3c6ef35fu;
+        int16_t r0 = (int16_t)(seed & 0xffffu);
+        seed = seed * 0x19660du + 0x3c6ef35fu;
+        int16_t r1 = (int16_t)(seed & 0xffffu);
+        seed = seed * 0x19660du + 0x3c6ef35fu;
+        int16_t r2 = (int16_t)(seed & 0xffffu);
+        seed = seed * 0x19660du + 0x3c6ef35fu;
+        int16_t r3 = (int16_t)(seed & 0xffffu);
+        out[0] = r0;
+        out[1] = r1;
+        out[2] = r2;
+        out[3] = r3;
+        out += 4;
+    }
+    for (; i < n; i++) {
         seed = seed * 0x19660du + 0x3c6ef35fu;
         *out++ = (int16_t)(seed & 0xffffu);
     }
@@ -50,9 +60,9 @@ int16_t fxdivl(int32_t num, int32_t den)
         result = 0;
     } else {
         /* Normalising stalls forever when num's low 16 bits are all zero,
-           because num << 16 is then zero and no shift ever sets bit 31. The
-           original has the same hole; the engine only feeds it small
-           magnitudes. */
+            because num << 16 is then zero and no shift ever sets bit 31. The
+            original has the same hole; the engine only feeds it small
+            magnitudes. */
         n = (uint32_t)num << 16;
         shift = 16;
         while ((n & 0x80000000u) == 0) {
@@ -77,17 +87,37 @@ int16_t fxdivl(int32_t num, int32_t den)
 
 void fxmul_vector(const int32_t *src, int16_t coef, int32_t *acc, int32_t n)
 {
-    int32_t i;
+    int32_t i = 0;
 
-    for (i = 0; i < n; i++)
+    for (; i + 3 < n; i += 4) {
+        int32_t m0 = fxmul_scaled(coef, src[i]);
+        int32_t m1 = fxmul_scaled(coef, src[i + 1]);
+        int32_t m2 = fxmul_scaled(coef, src[i + 2]);
+        int32_t m3 = fxmul_scaled(coef, src[i + 3]);
+        acc[i] += m0;
+        acc[i + 1] += m1;
+        acc[i + 2] += m2;
+        acc[i + 3] += m3;
+    }
+    for (; i < n; i++)
         acc[i] += fxmul_scaled(coef, src[i]);
 }
 
 void fxmul1_vector(const int16_t *src, int16_t coef, int32_t *acc, int32_t n)
 {
-    int32_t i;
+    int32_t i = 0;
 
-    for (i = 0; i < n; i++)
+    for (; i + 3 < n; i += 4) {
+        int32_t m0 = fxmul_scaled(coef, (int32_t)src[i] << 4);
+        int32_t m1 = fxmul_scaled(coef, (int32_t)src[i + 1] << 4);
+        int32_t m2 = fxmul_scaled(coef, (int32_t)src[i + 2] << 4);
+        int32_t m3 = fxmul_scaled(coef, (int32_t)src[i + 3] << 4);
+        acc[i] += m0;
+        acc[i + 1] += m1;
+        acc[i + 2] += m2;
+        acc[i + 3] += m3;
+    }
+    for (; i < n; i++)
         acc[i] += fxmul_scaled(coef, (int32_t)src[i] << 4);
 }
 
@@ -167,6 +197,27 @@ void pole_filter(filter_parms *fp, int32_t *buf, int32_t n)
         int32_t p2 = buf[i - 2];
         int32_t p1 = buf[i - 1];
 
+        for (; i + 1 < n; i += 2) {
+            int32_t in0 = buf[i];
+            int32_t in1 = buf[i + 1];
+
+            int32_t t3_0 = fxmul_scaled(sa, in0);
+            int32_t t1_0 = fxmul_scaled(sc, p2);
+            int32_t t2_0 = fxmul_scaled(sb, p1);
+            int32_t t1_1 = fxmul_scaled(sc, p1);
+            int32_t t3_1 = fxmul_scaled(sa, in1);
+
+            int32_t out0 = t1_0 + t2_0 * 2 + t3_0 * 4;
+            buf[i] = out0;
+
+            int32_t t2_1 = fxmul_scaled(sb, out0);
+            int32_t out1 = t1_1 + t2_1 * 2 + t3_1 * 4;
+            buf[i + 1] = out1;
+
+            p2 = out0;
+            p1 = out1;
+        }
+
         for (; i < n; i++) {
             int32_t in = buf[i];
             t1 = fxmul_scaled(sc, p2);
@@ -204,7 +255,23 @@ void parallel0_filter(filter_parms *fp, int32_t *buf, int32_t n)
         int32_t p2 = buf[-2];
         int32_t p1 = buf[-1];
 
-        for (i = 0; i < n; i++) {
+        for (i = 0; i + 1 < n; i += 2) {
+            t1 = fxmul_scaled(sc, p2);
+            t2 = fxmul_scaled(sb, p1);
+            int32_t t1_1 = fxmul_scaled(sc, p1);
+
+            int32_t out0 = t1 + t2 * 2;
+            buf[i] = out0;
+
+            int32_t t2_1 = fxmul_scaled(sb, out0);
+            int32_t out1 = t1_1 + t2_1 * 2;
+            buf[i + 1] = out1;
+
+            p2 = out0;
+            p1 = out1;
+        }
+
+        for (; i < n; i++) {
             t1 = fxmul_scaled(sc, p2);
             t2 = fxmul_scaled(sb, p1);
             int32_t out = t1 + t2 * 2;
@@ -253,11 +320,30 @@ void zero_filter(filter_parms *fp, const zero_ABCs *z, int32_t *buf, int32_t n)
         fp->ramp -= count;
     }
 
+    const int32_t za = z->a;
+    const int32_t zb = z->b;
+    const int32_t zc = z->c;
+
+    for (; i + 3 < n; i += 4) {
+        int32_t x0 = buf[i];
+        int32_t x1 = buf[i + 1];
+        int32_t x2 = buf[i + 2];
+        int32_t x3 = buf[i + 3];
+
+        buf[i]     = (mul32(za, x0) >> 4) + (mul32(zb, p1) >> 4) + (mul32(zc, p2) >> 4);
+        buf[i + 1] = (mul32(za, x1) >> 4) + (mul32(zb, x0) >> 4) + (mul32(zc, p1) >> 4);
+        buf[i + 2] = (mul32(za, x2) >> 4) + (mul32(zb, x1) >> 4) + (mul32(zc, x0) >> 4);
+        buf[i + 3] = (mul32(za, x3) >> 4) + (mul32(zb, x2) >> 4) + (mul32(zc, x1) >> 4);
+
+        p2 = x2;
+        p1 = x3;
+    }
+
     for (; i < n; i++) {
         x = buf[i];
-        buf[i] = (mul32(z->a, x) >> 4)
-               + (mul32(z->b, p1) >> 4)
-               + (mul32(z->c, p2) >> 4);
+        buf[i] = (mul32(za, x) >> 4)
+               + (mul32(zb, p1) >> 4)
+               + (mul32(zc, p2) >> 4);
         p2 = p1;
         p1 = x;
     }
