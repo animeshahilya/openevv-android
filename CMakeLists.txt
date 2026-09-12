@@ -1,22 +1,28 @@
 cmake_minimum_required(VERSION 3.22.1)
-project(openevv LANGUAGES C)
+project(eloquick LANGUAGES C)
 
 # Set C standard
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# Default to release optimization (-O2)
+# Default to release optimization (-O3)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-# Compiler flags: -O2 ensures bit-exact synthesis across architectures
+# Compiler flags: -O3 for high-speed formant & delta synthesis,
+# hidden visibility for direct relative jumps, and fast-math flags for DSP vectorization
 add_compile_options(
-    -O2
+    -O3
     -fomit-frame-pointer
     -DEVV_ARENA=1
+    -DECI_BUILDING=1
     -ffunction-sections
     -fdata-sections
+    -fvisibility=hidden
+    -fno-math-errno
+    -fno-trapping-math
+    -ffp-contract=fast
     -fPIC
     -w
     -Wno-implicit-function-declaration
@@ -77,7 +83,17 @@ file(APPEND "${DELTA_LANGS_C}" "}\n")
 
 list(APPEND OPENEVV_LANG_FILES "${DELTA_LANGS_C}")
 
-# 1. Target: Shared Library (libopenevv.so)
+# 1. Primary Target: Shared Library (libeloquick.so)
+add_library(eloquick SHARED
+    ${OPENEVV_SRC_FILES}
+    ${OPENEVV_LANG_FILES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/eci_api.c
+)
+target_include_directories(eloquick PUBLIC ${OPENEVV_INCLUDE_DIRS})
+target_link_libraries(eloquick m pthread)
+set_target_properties(eloquick PROPERTIES OUTPUT_NAME "eloquick")
+
+# Compatibility Target: libopenevv.so
 add_library(openevv SHARED
     ${OPENEVV_SRC_FILES}
     ${OPENEVV_LANG_FILES}
@@ -87,8 +103,22 @@ target_include_directories(openevv PUBLIC ${OPENEVV_INCLUDE_DIRS})
 target_link_libraries(openevv m pthread)
 set_target_properties(openevv PROPERTIES OUTPUT_NAME "openevv")
 
-# 2. Target: Standalone CLI executable (evv)
+# 2. Standalone CLI executables (eloquick and evv)
 if(NOT DEFINED OPENEVV_BUILD_CLI OR OPENEVV_BUILD_CLI)
+    # Primary CLI executable: eloquick
+    add_executable(eloquick_cli
+        ${OPENEVV_SRC_FILES}
+        ${OPENEVV_LANG_FILES}
+        ${CMAKE_CURRENT_SOURCE_DIR}/cli/evv.c
+    )
+    target_include_directories(eloquick_cli PRIVATE ${OPENEVV_INCLUDE_DIRS})
+    target_link_libraries(eloquick_cli m pthread)
+    set_target_properties(eloquick_cli PROPERTIES OUTPUT_NAME "eloquick")
+    if(ANDROID)
+        set_target_properties(eloquick_cli PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
+    endif()
+
+    # Compatibility CLI executable: evv
     add_executable(evv
         ${OPENEVV_SRC_FILES}
         ${OPENEVV_LANG_FILES}

@@ -160,11 +160,23 @@ void pole_filter(filter_parms *fp, int32_t *buf, int32_t n)
         fp->ramp -= count;
     }
 
-    for (; i < n; i++) {
-        t1 = fxmul_scaled(fp->sc, buf[i - 2]);
-        t2 = fxmul_scaled(fp->sb, buf[i - 1]);
-        t3 = fxmul_scaled(fp->sa, buf[i]);
-        buf[i] = t1 + t2 * 2 + t3 * 4;
+    if (i < n) {
+        const int16_t sc = fp->sc;
+        const int16_t sb = fp->sb;
+        const int16_t sa = fp->sa;
+        int32_t p2 = buf[i - 2];
+        int32_t p1 = buf[i - 1];
+
+        for (; i < n; i++) {
+            int32_t in = buf[i];
+            t1 = fxmul_scaled(sc, p2);
+            t2 = fxmul_scaled(sb, p1);
+            t3 = fxmul_scaled(sa, in);
+            int32_t out = t1 + t2 * 2 + t3 * 4;
+            buf[i] = out;
+            p2 = p1;
+            p1 = out;
+        }
     }
 
     if (n > 1) {
@@ -186,18 +198,28 @@ void parallel0_filter(filter_parms *fp, int32_t *buf, int32_t n)
     buf[-2] = fp->d2;
     buf[-1] = fp->d1;
 
-    for (i = 0; i < n; i++) {
-        t1 = fxmul_scaled(fp->sc, buf[i - 2]);
-        t2 = fxmul_scaled(fp->sb, buf[i - 1]);
-        buf[i] = t1 + t2 * 2;
+    if (n > 0) {
+        const int16_t sc = fp->sc;
+        const int16_t sb = fp->sb;
+        int32_t p2 = buf[-2];
+        int32_t p1 = buf[-1];
+
+        for (i = 0; i < n; i++) {
+            t1 = fxmul_scaled(sc, p2);
+            t2 = fxmul_scaled(sb, p1);
+            int32_t out = t1 + t2 * 2;
+            buf[i] = out;
+            p2 = p1;
+            p1 = out;
+        }
     }
 
     if (n > 1) {
-        fp->d2 = buf[i - 2];
-        fp->d1 = buf[i - 1];
+        fp->d2 = buf[n - 2];
+        fp->d1 = buf[n - 1];
     } else {
         fp->d2 = fp->d1;
-        fp->d1 = buf[i - 1];
+        fp->d1 = buf[n - 1];
     }
 }
 
@@ -537,14 +559,17 @@ static void pole_filter_wide(filter_parms *fp, int32_t *buf, int32_t n)
         fp->ramp -= count;
     }
 
-    for (; i < n; i++) {
-        double y = fp->sa * (4.0 / 32768.0) * buf[i]
-                 + fp->sb * (2.0 / 32768.0) * y1
-                 + fp->sc * (1.0 / 32768.0) * y2;
+    if (i < n) {
+        const double c_a = fp->sa * (4.0 / 32768.0);
+        const double c_b = fp->sb * (2.0 / 32768.0);
+        const double c_c = fp->sc * (1.0 / 32768.0);
 
-        y2 = y1;
-        y1 = y;
-        buf[i] = wide_round(y);
+        for (; i < n; i++) {
+            double y = c_a * buf[i] + c_b * y1 + c_c * y2;
+            y2 = y1;
+            y1 = y;
+            buf[i] = wide_round(y);
+        }
     }
 
     z[0] = y1;

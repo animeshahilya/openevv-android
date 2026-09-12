@@ -1,6 +1,6 @@
-# OpenEVV (Android Port & Toolchain)
+# EloQuick (Android Port & Performance Toolchain)
 
-> **Tailored for Android**: Reimplementation of IBM's Eloquence / Embedded ViaVoice text-to-speech engine compiled with the Android NDK. Features 16KB page alignment (Android 15+ compatible), multi-ABI support (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`), CMake integration for Android Studio/Gradle, and standalone CLI binaries for device shell and Termux.
+> **EloQuick**: Ultra-fast reimplementation of IBM's Eloquence / Embedded ViaVoice text-to-speech engine tailored for Android and screen-reading performance. Features **-O3 DSP & formant vectorization**, **16KB page alignment** (Android 15+ compatible), multi-ABI support (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`), CMake integration for Android Studio/Gradle, and standalone CLI binaries for device shell and Termux.
 
 [![Android Build](https://github.com/animeshahilya/openevv-android/actions/workflows/android.yml/badge.svg)](https://github.com/animeshahilya/openevv-android/actions/workflows/android.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -9,13 +9,14 @@
 
 ---
 
-## Tailored for Android
+## Tailored for Android & Speed
 
-This repository packages OpenEVV specifically for Android applications, screen-reader services (like TalkBack engines), and standalone on-device command-line environments:
+This repository packages and optimizes Eloquence / OpenEVV specifically for Android applications, screen-reader services (like TalkBack engines), and standalone on-device command-line environments:
 
+- **Ultra-Fast Formant Synthesis**: Klatt DSP resonators optimized with register caching, loop-invariant hoisting, branch prediction, and `-O3` auto-vectorization for instant, zero-latency speech.
 - **16KB Page Size Alignment**: Linked with `-Wl,-z,max-page-size=16384` to guarantee full compatibility with Android 15+ devices.
-- **Shared Library (`libopenevv.so`)**: Ready for direct dynamic linking or JNI bridging inside Android apps (`TextToSpeechService`).
-- **Standalone CLI Executable (`evv`)**: Position-independent binary (`-pie`) that can be pushed via `adb` or run directly inside Termux.
+- **Shared Libraries (`libeloquick.so` & `libopenevv.so`)**: Ready for direct dynamic linking or JNI bridging inside Android apps (`TextToSpeechService`). Both primary and legacy naming supported out-of-the-box.
+- **Standalone CLI Executable (`eloquick` & `evv`)**: Position-independent binary (`-pie`) that can be pushed via `adb` or run directly inside Termux.
 - **All 9 Bundled Languages Pre-Linked**: Includes US English, British English, German, Castilian Spanish, Latin American Spanish, European French, Canadian French, Italian, and Polish.
 - **Full CMake & Python NDK Build Toolchain**: Build with a single command or integrate via Gradle `externalNativeBuild`.
 
@@ -32,8 +33,10 @@ python tools/build_android.py --abi all
 ```
 
 Output files are placed under `build/android/<abi>/`:
-- `libopenevv.so` (Shared library exposing standard `include/eci.h` API)
-- `evv` (Standalone command-line synthesis tool)
+- `libeloquick.so` (Primary shared library exposing standard `include/eci.h` API)
+- `libopenevv.so`  (Compatibility mirror for existing OpenEVV apps)
+- `eloquick`       (Primary standalone command-line synthesis tool)
+- `evv`            (Compatibility mirror)
 
 For detailed Android integration instructions, see [docs/android.md](docs/android.md).
 

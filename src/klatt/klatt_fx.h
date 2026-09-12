@@ -8,7 +8,13 @@
 
 /* imull keeps the low 32 bits and lets the rest go. Signed overflow is
    undefined in C, so wrap in unsigned and reinterpret to get the same bits. */
-static inline int32_t mul32(int32_t a, int32_t b)
+#if defined(__GNUC__) || defined(__clang__)
+#define EVV_INLINE static inline __attribute__((always_inline))
+#else
+#define EVV_INLINE static inline
+#endif
+
+EVV_INLINE int32_t mul32(int32_t a, int32_t b)
 {
     return (int32_t)((uint32_t)a * (uint32_t)b);
 }
@@ -36,13 +42,13 @@ static inline int32_t mul32(int32_t a, int32_t b)
    whole engine is held to IBM's samples byte for byte. */
 static const unsigned char fx_pre[8] = { 15, 12, 8, 4, 0, 0, 0, 0 };
 
-static inline int32_t fxmul_scaled(int32_t coef, int32_t x)
+EVV_INLINE int32_t fxmul_scaled(int32_t coef, int32_t x)
 {
-#if defined(__GNUC__)
+#if defined(__GNUC__) || defined(__clang__)
     /* The first of the five ranges is much the commonest, so it keeps a test
        of its own: one compare that predicts, against a count that is always
        paid. What is left goes the branchless way. */
-    if ((uint32_t)(x + 0xffff) <= 0x1fffeu)
+    if (__builtin_expect((uint32_t)(x + 0xffff) <= 0x1fffeu, 1))
         return mul32(coef, x) >> 15;
     {
         /* |x|, without a branch and without overflowing on the most negative

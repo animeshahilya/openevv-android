@@ -1,21 +1,23 @@
-# OpenEVV on Android
+# EloQuick on Android
 
-OpenEVV is a portable C reimplementation of IBM's Embedded ViaVoice / ETI Eloquence text-to-speech engine. This repository provides build toolchains, CMake scripts, and optimizations tailored specifically for Android development and modern Android devices.
+EloQuick is an ultra-fast C reimplementation of IBM's Embedded ViaVoice / ETI Eloquence text-to-speech engine. This repository provides build toolchains, CMake scripts, and optimizations tailored specifically for Android development, screen readers (TalkBack), and modern mobile devices.
 
 ---
 
-## Key Android Features
+## Key Android Features & Speed Enhancements
 
-1. **Standalone Shared Library (`libopenevv.so`)**:
-   Exposes the full, standard ECI API (`include/eci.h`) for easy integration into Android `TextToSpeechService` implementations, JNI bridges, or native engines.
-2. **Standalone Command-Line Binary (`evv`)**:
+1. **Ultra-Fast Formant Synthesis**:
+   Synthesizes speech at extreme rates with negligible CPU footprint. DSP loops are optimized with register-caching of resonator states, loop-invariant hoisting, branch prediction hints (`__builtin_expect`), and Clang `-O3` auto-vectorization.
+2. **Dual Standalone Shared Libraries (`libeloquick.so` & `libopenevv.so`)**:
+   Exposes the full standard ECI API (`include/eci.h`) for easy integration into Android `TextToSpeechService` implementations, JNI bridges, or accessibility services. Both new (`eloquick`) and legacy (`openevv`) library names are output.
+3. **Standalone Command-Line Binary (`eloquick` & `evv`)**:
    Position-independent executable (`-pie`) for direct testing via `adb shell` or running inside Termux on Android devices.
-3. **Android 15+ 16KB Page Size Alignment**:
-   Linked with `-Wl,-z,max-page-size=16384` to guarantee compatibility with upcoming Android devices requiring 16KB memory pages.
-4. **All 9 Bundled Languages Pre-Compiled**:
+4. **Android 15+ 16KB Page Size Alignment**:
+   Linked with `-Wl,-z,max-page-size=16384` to guarantee compatibility with Android 15+ devices requiring 16KB memory pages.
+5. **All 9 Bundled Languages Pre-Compiled**:
    US English (`enus`), German (`dede`), British English (`engb`), Castilian Spanish (`eses`), Latin American Spanish (`esus`), Canadian French (`frca`), European French (`frfr`), Italian (`itit`), and Polish (`plpl`) are directly bundled and bound.
-5. **Bit-Exact Speech Output**:
-   Compiles at `-O2` with safe floating point and memory arena (`-DEVV_ARENA=1`) to preserve certified Eloquence audio samples across ARM and x86 architectures.
+6. **Bit-Exact Speech Output with Memory Arena**:
+   Uses `-DEVV_ARENA=1` with zero runtime allocations during synthesis to preserve certified Eloquence audio samples across ARM and x86 architectures with zero latency.
 
 ---
 
@@ -52,7 +54,9 @@ Output binaries are placed in:
 ```
 build/android/
   ├── arm64-v8a/
+  │   ├── libeloquick.so
   │   ├── libopenevv.so
+  │   ├── eloquick
   │   └── evv
   ├── armeabi-v7a/
   ├── x86_64/

@@ -85,9 +85,11 @@ static short *samples;
 static size_t nsamples;
 static size_t cap;
 
+static const char *prog_name = "eloquick";
+
 static void die(const char *what)
 {
-    fprintf(stderr, "evv: %s\n", what);
+    fprintf(stderr, "%s: %s\n", prog_name, what);
     exit(1);
 }
 
@@ -209,7 +211,7 @@ static char *join(int argc, char **argv)
 static void usage(FILE *f)
 {
     fprintf(f,
-"usage: evv [options] [text ...]\n"
+"usage: %s [options] [text ...]\n"
 "\n"
 "Speaks the text and writes the audio as a wave file. With no text, reads\n"
 "it from standard input; with no -o, writes the wave to standard output\n"
@@ -234,8 +236,9 @@ static void usage(FILE *f)
 "  -l        say what each voice is set to, and stop\n"
 "  -h        this\n"
 "\n"
-"  evv -o hello.wav \"Hello from Eloquence.\"\n"
-"  evv \"Hello from Eloquence.\" | aplay -q -\n");
+"  %s -o hello.wav \"Hello from Eloquence.\"\n"
+"  %s \"Hello from Eloquence.\" | aplay -q -\n",
+    prog_name, prog_name, prog_name);
 }
 
 int main(int argc, char **argv)
@@ -248,6 +251,16 @@ int main(int argc, char **argv)
     OldInst    *h;
     FILE       *f;
     int         i;
+
+    if (argc > 0 && argv[0] && argv[0][0]) {
+        const char *slash = strrchr(argv[0], '/');
+        if (slash)
+            prog_name = slash + 1;
+        else {
+            slash = strrchr(argv[0], '\\');
+            prog_name = slash ? slash + 1 : argv[0];
+        }
+    }
 
 #if defined(_WIN32)
     /* Windows opens the standard channels in text mode, which is fatal to a

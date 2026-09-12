@@ -308,6 +308,11 @@ const void *vtbl_elistqueue[11] = {
     (void *)sti_eListQueueDestroy
 };
 
+const void *vtbl_eCollection[1] = { (void *)purecall };
+const void *vtbl_eList[1] = { (void *)purecall };
+
+ALIAS("??_7ECollection@@6B@", "vtbl_eCollection");
+ALIAS("??_7EList@@6B@", "vtbl_eList");
 ALIAS("??_7ESList@@6B@", "vtbl_eslist");
 ALIAS("??_7IndexQueue@@6B@", "vtbl_indexqueue");
 ALIAS("??_7EListQueue@@6B@", "vtbl_elistqueue");

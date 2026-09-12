@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Build OpenEVV executable and shared library tailored for Android.
+"""Build EloQuick (ultra-fast Eloquence / OpenEVV engine tailored for Android).
 
-Compiles with Clang from the Android NDK using -O2, -ffunction-sections,
--fdata-sections, and links with --gc-sections, symbol stripping, and
-16KB page alignment (-Wl,-z,max-page-size=16384) compliant with Android 15+.
+Compiles with Clang from the Android NDK using -O3, -fvisibility=hidden,
+-ffunction-sections, -fdata-sections, -fno-math-errno, -ffp-contract=fast,
+and links with --gc-sections, symbol stripping, and 16KB page alignment
+(-Wl,-z,max-page-size=16384) compliant with Android 15+.
 
 Supports target ABIs:
   - arm64-v8a (default)
@@ -12,8 +13,10 @@ Supports target ABIs:
   - x86
 
 Produces:
-  - build/android/<abi>/evv          (standalone CLI executable)
-  - build/android/<abi>/libopenevv.so (shared library exposing standard ECI API)
+  - build/android/<abi>/eloquick      (standalone CLI executable)
+  - build/android/<abi>/libeloquick.so (shared library exposing standard ECI API)
+  - build/android/<abi>/evv          (backwards compatibility alias)
+  - build/android/<abi>/libopenevv.so (backwards compatibility alias)
 """
 
 import argparse
@@ -113,7 +116,7 @@ def ensure_rules_generated():
                 sys.exit(f"Rule generation failed for {lang}:\n{res.stdout}\n{res.stderr}")
     print("Rule tables ready.\n")
 
-def build_abi(abi, ndk_root):
+def build_abi(abi, ndk_root, debug=False):
     if abi not in ABI_CONFIGS:
         sys.exit(f"Unknown ABI: {abi}. Available: {list(ABI_CONFIGS.keys())}")
     
@@ -122,11 +125,12 @@ def build_abi(abi, ndk_root):
     if not clang:
         sys.exit(f"Could not find NDK Clang compiler for {abi} in {ndk_root}")
     
-    print(f"=== Building OpenEVV for Android ABI: {abi} ===")
+    mode_str = "DEBUG" if debug else "RELEASE (-O3)"
+    print(f"=== Building EloQuick for Android ABI: {abi} [{mode_str}] ===")
     print(f"Compiler: {clang}")
 
     build_dir = os.path.join(ROOT, "build", "android", abi)
-    obj_dir = os.path.join(build_dir, "obj")
+    obj_dir = os.path.join(build_dir, "obj_debug" if debug else "obj")
     os.makedirs(obj_dir, exist_ok=True)
 
     langs_c = os.path.join(build_dir, "delta_langs.c")
@@ -164,18 +168,30 @@ def build_abi(abi, ndk_root):
     include_dirs = sorted(set(src_dirs + lang_dirs + [build_dir, os.path.join(ROOT, "include")]))
     inc_flags = [f"-I{d}" for d in include_dirs]
 
+    opt_cflags = [
+        "-O0",
+        "-g",
+        "-DDEBUG=1",
+    ] if debug else [
+        "-O3",
+        "-fno-math-errno",
+        "-fno-trapping-math",
+        "-ffp-contract=fast",
+    ]
+
     common_cflags = [
-        "-O2",
-        "-fomit-frame-pointer",
+        "-fomit-frame-pointer" if not debug else "-fno-omit-frame-pointer",
         "-DEVV_ARENA=1",
+        "-DECI_BUILDING=1",
         "-ffunction-sections",
         "-fdata-sections",
+        "-fvisibility=hidden",
         "-fPIC",
         "-w",
         "-Wno-implicit-function-declaration",
         "-Werror=int-conversion",
         "-Werror=incompatible-pointer-types",
-    ] + cfg["cflags"] + inc_flags
+    ] + opt_cflags + cfg["cflags"] + inc_flags
 
     def compile_source(src):
         rel = os.path.relpath(src, ROOT)
@@ -194,7 +210,7 @@ def build_abi(abi, ndk_root):
         return obj
 
     core_sources = src_files + lang_files
-    print(f"Compiling {len(core_sources)} core sources...")
+    print(f"Compiling {len(core_sources)} core sources [{'DEBUG' if debug else '-O3 release'} + DSP optimizations]...")
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 8) as ex:
         core_objs = list(ex.map(compile_source, core_sources))
 
@@ -216,20 +232,22 @@ def build_abi(abi, ndk_root):
         "-Wl,-z,common-page-size=16384",
     ]
 
-    out_cli = os.path.join(build_dir, "evv")
-    print(f"Linking executable {out_cli}...")
+    out_eloquick = os.path.join(build_dir, "eloquick")
+    out_evv = os.path.join(build_dir, "evv")
+    print(f"Linking executable {out_eloquick}...")
     cli_rsp = os.path.join(build_dir, "cli_objects.rsp")
     with open(cli_rsp, "w") as f:
         for obj in core_objs + [cli_obj]:
             f.write(obj.replace("\\", "/") + "\n")
 
+    strip_flags = [] if debug else ["-Wl,-s"]
+
     link_cli_cmd = [
         clang,
-        "-o", out_cli,
+        "-o", out_eloquick,
         "-pie",
         "-Wl,--gc-sections",
-        "-Wl,-s",
-    ] + linker_alignment_flags + [
+    ] + strip_flags + linker_alignment_flags + [
         "-lm",
         "-pthread",
         f"@{cli_rsp}",
@@ -238,8 +256,12 @@ def build_abi(abi, ndk_root):
     if res.returncode != 0:
         sys.exit(f"CLI linking failed for ABI {abi}:\n{res.stderr}")
 
-    out_so = os.path.join(build_dir, "libopenevv.so")
-    print(f"Linking shared library {out_so}...")
+    import shutil
+    shutil.copy2(out_eloquick, out_evv)
+
+    out_eloquick_so = os.path.join(build_dir, "libeloquick.so")
+    out_openevv_so = os.path.join(build_dir, "libopenevv.so")
+    print(f"Linking shared library {out_eloquick_so}...")
     so_rsp = os.path.join(build_dir, "so_objects.rsp")
     with open(so_rsp, "w") as f:
         for obj in core_objs + [lib_obj]:
@@ -247,12 +269,11 @@ def build_abi(abi, ndk_root):
 
     link_so_cmd = [
         clang,
-        "-o", out_so,
+        "-o", out_eloquick_so,
         "-shared",
-        "-Wl,-soname,libopenevv.so",
+        "-Wl,-soname,libeloquick.so",
         "-Wl,--gc-sections",
-        "-Wl,-s",
-    ] + linker_alignment_flags + [
+    ] + strip_flags + linker_alignment_flags + [
         "-lm",
         "-pthread",
         f"@{so_rsp}",
@@ -261,17 +282,36 @@ def build_abi(abi, ndk_root):
     if res.returncode != 0:
         sys.exit(f"Shared library linking failed for ABI {abi}:\n{res.stderr}")
 
+    # Also link/copy libopenevv.so for backwards compatibility
+    link_so_compat_cmd = [
+        clang,
+        "-o", out_openevv_so,
+        "-shared",
+        "-Wl,-soname,libopenevv.so",
+        "-Wl,--gc-sections",
+    ] + strip_flags + linker_alignment_flags + [
+        "-lm",
+        "-pthread",
+        f"@{so_rsp}",
+    ]
+    subprocess.run(link_so_compat_cmd, capture_output=True, text=True)
+
     print(f"ABI {abi} Build Complete:")
-    print(f"  CLI binary:     {out_cli} ({os.path.getsize(out_cli):,} bytes)")
-    print(f"  Shared library: {out_so} ({os.path.getsize(out_so):,} bytes)\n")
+    print(f"  CLI binary:     {out_eloquick} (also mirrored as {out_evv}) [{os.path.getsize(out_eloquick):,} bytes]")
+    print(f"  Shared library: {out_eloquick_so} (also mirrored as {out_openevv_so}) [{os.path.getsize(out_eloquick_so):,} bytes]\n")
 
 def main():
-    parser = argparse.ArgumentParser(description="Build OpenEVV tailored for Android.")
+    parser = argparse.ArgumentParser(description="Build EloQuick tailored for Android.")
     parser.add_argument(
         "--abi",
         default="arm64-v8a",
         choices=["arm64-v8a", "armeabi-v7a", "x86_64", "x86", "all"],
         help="Target Android ABI (default: arm64-v8a, or 'all')",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Build with debug symbols (-O0 -g) and unstripped binaries",
     )
     args = parser.parse_args()
 
@@ -283,9 +323,9 @@ def main():
 
     if args.abi == "all":
         for abi in ABI_CONFIGS:
-            build_abi(abi, ndk_root)
+            build_abi(abi, ndk_root, debug=args.debug)
     else:
-        build_abi(args.abi, ndk_root)
+        build_abi(args.abi, ndk_root, debug=args.debug)
 
 if __name__ == "__main__":
     main()
