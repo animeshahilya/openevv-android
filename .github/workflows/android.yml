@@ -36,12 +36,24 @@ jobs:
 
       - name: Verify 16KB ELF Page Alignment
         run: |
-          $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -l build/android/${{ matrix.abi }}/libopenevv.so | grep "LOAD"
+          for so in build/android/${{ matrix.abi }}/libeloquick.so build/android/${{ matrix.abi }}/libopenevv.so; do
+            echo "== $so =="
+            $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -l "$so" | grep "LOAD"
+          done
+
+      - name: Smoke test CLI (x86_64 host)
+        if: matrix.abi == 'x86_64'
+        run: |
+          ./build/android/x86_64/eloquick -L list
+          ./build/android/x86_64/eloquick -o /tmp/smoke.wav "Hello from EloQuick."
+          python3 -c "import struct; d=open('/tmp/smoke.wav','rb').read(); assert d[:4]==b'RIFF' and d[8:12]==b'WAVE', 'not a WAV'; print('WAV OK', len(d), 'bytes')"
 
       - name: Upload Binaries (${{ matrix.abi }})
         uses: actions/upload-artifact@v4
         with:
           name: openevv-android-${{ matrix.abi }}
           path: |
+            build/android/${{ matrix.abi }}/libeloquick.so
             build/android/${{ matrix.abi }}/libopenevv.so
+            build/android/${{ matrix.abi }}/eloquick
             build/android/${{ matrix.abi }}/evv

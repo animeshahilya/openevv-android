@@ -15,10 +15,10 @@ This repository packages and optimizes Eloquence / OpenEVV specifically for Andr
 
 - **Ultra-Fast Formant Synthesis**: Klatt DSP resonators optimized with register caching, loop-invariant hoisting, branch prediction, and `-O3` auto-vectorization for instant, zero-latency speech.
 - **16KB Page Size Alignment**: Linked with `-Wl,-z,max-page-size=16384` to guarantee full compatibility with Android 15+ devices.
-- **Shared Libraries (`libeloquick.so` & `libopenevv.so`)**: Ready for direct dynamic linking or JNI bridging inside Android apps (`TextToSpeechService`). Both primary and legacy naming supported out-of-the-box.
-- **Standalone CLI Executable (`eloquick` & `evv`)**: Position-independent binary (`-pie`) that can be pushed via `adb` or run directly inside Termux.
-- **All 9 Bundled Languages Pre-Linked**: Includes US English, British English, German, Castilian Spanish, Latin American Spanish, European French, Canadian French, Italian, and Polish.
-- **Full CMake & Python NDK Build Toolchain**: Build with a single command or integrate via Gradle `externalNativeBuild`.
+- **Shared Libraries (`libeloquick.so` & `libopenevv.so`)**: Ready for direct dynamic linking or JNI bridging inside Android apps (`TextToSpeechService`). Both primary and legacy naming supported out-of-the-box, with a bundled `com.eloquick.tts.EloQuickEngine` JNI bridge (see `android/eloquick_jni.c` and `docs/android.md`).
+- **Standalone CLI Executable (`eloquick` & `evv`)**: Position-independent binary (`-pie`) that can be pushed via `adb` or run directly inside Termux. Multi-language aware via `-L list` / `-L <id>` (a build holds ten languages but speaks the first unless told which).
+- **All 10 Bundled Languages Pre-Linked**: Includes US English, British English, German, Castilian Spanish, Latin American Spanish, European French, Canadian French, Italian, Polish, and Japanese (with `rom/jajp` romanizer).
+- **Full CMake & Python NDK Build Toolchain**: Build with a single command or integrate via Gradle `externalNativeBuild`. The engine compiles once per ABI (object library); both `.so`s and the CLI link the same objects. Trim with `--langs` / `-DOPENEVV_LANGS` for smaller APKs.
 
 ### Android Quickstart
 

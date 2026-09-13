@@ -12,11 +12,15 @@ Supports target ABIs:
   - x86_64
   - x86
 
-Produces:
-  - build/android/<abi>/eloquick      (standalone CLI executable)
-  - build/android/<abi>/libeloquick.so (shared library exposing standard ECI API)
-  - build/android/<abi>/evv          (backwards compatibility alias)
-  - build/android/<abi>/libopenevv.so (backwards compatibility alias)
+Produces per ABI under build/android/<abi>/:
+  - eloquick           (standalone CLI executable)
+  - evv                (backwards compatibility copy; CLI is argv[0]-aware)
+  - libeloquick.so     (shared library exposing standard ECI API)
+  - libopenevv.so      (backwards compatibility rebuild with own SONAME)
+
+Languages: all ten upstream modules (enus dede engb eses esus frca frfr
+itit plpl jajp). Trim with --langs for smaller APKs, e.g.
+  python tools/build_android.py --langs enus,dede
 """
 
 import argparse
@@ -29,7 +33,7 @@ from concurrent.futures import ThreadPoolExecutor
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(ROOT)
 
-LANGS = ["enus", "dede", "engb", "eses", "esus", "frca", "frfr", "itit", "plpl"]
+ALL_LANGS = ["enus", "dede", "engb", "eses", "esus", "frca", "frfr", "itit", "plpl", "jajp"]
 
 ABI_CONFIGS = {
     "arm64-v8a": {
@@ -54,30 +58,64 @@ ABI_CONFIGS = {
     },
 }
 
+# Header extensions that invalidate a cached object when newer than it.
+# Lesson from beyondsighttech/openevv: the build once compared each source
+# against its own object alone, so a merge changing delta_lang.h left stale
+# objects linking modules that disagree about a struct -> segfault. A wrong
+# rebuild costs a minute; a missed one costs an hour. We compare against the
+# newest header in the tree (cheap: one walk per ABI build).
+HEADER_EXTS = (".h",)
+
+
 def find_ndk_root():
     ndk = os.environ.get("ANDROID_NDK_HOME") or os.environ.get("ANDROID_NDK_ROOT")
     if ndk and os.path.isdir(ndk):
         return ndk
-    
+
+    home = os.path.expanduser("~")
     candidates = [
+        # Windows (current user + default install layouts)
         r"C:\Users\alex\AppData\Local\Android\Sdk\ndk",
-        os.path.expanduser("~/AppData/Local/Android/Sdk/ndk"),
-        os.path.expanduser("~/Android/Sdk/ndk"),
+        os.path.join(home, "AppData", "Local", "Android", "Sdk", "ndk"),
+        # Linux
+        os.path.join(home, "Android", "Sdk", "ndk"),
         "/opt/android-sdk/ndk",
         "/usr/local/lib/android/sdk/ndk",
+        os.path.join(home, "Library", "Android", "sdk", "ndk"),
+        # macOS default
+        os.path.join(home, "Library", "Android", "sdk", "ndk"),
     ]
     for c in candidates:
         if os.path.isdir(c):
-            versions = sorted(os.listdir(c), reverse=True)
+            try:
+                versions = sorted(os.listdir(c), reverse=True)
+            except OSError:
+                continue
             if versions:
                 return os.path.join(c, versions[0])
+    # Also accept a direct NDK dir pointed at by ANDROID_HOME/sdk layout
+    for env in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        sdk = os.environ.get(env)
+        if sdk:
+            ndk_dir = os.path.join(sdk, "ndk")
+            if os.path.isdir(ndk_dir):
+                try:
+                    versions = sorted(os.listdir(ndk_dir), reverse=True)
+                except OSError:
+                    continue
+                if versions:
+                    return os.path.join(ndk_dir, versions[0])
     return None
+
 
 def find_clang_binary(ndk_root, triple, api):
     llvm_bin = os.path.join(ndk_root, "toolchains", "llvm", "prebuilt")
     if not os.path.isdir(llvm_bin):
         return None
-    prebuilt_hosts = os.listdir(llvm_bin)
+    try:
+        prebuilt_hosts = os.listdir(llvm_bin)
+    except OSError:
+        return None
     if not prebuilt_hosts:
         return None
     host_bin = os.path.join(llvm_bin, prebuilt_hosts[0], "bin")
@@ -86,15 +124,22 @@ def find_clang_binary(ndk_root, triple, api):
     target_clang = os.path.join(host_bin, f"{triple}{api}-clang{exe_suffix}")
     if os.path.exists(target_clang):
         return target_clang
+    # Fall back to versioned triples some NDKs ship (e.g. armv7a needs
+    # androideabi suffix handling) and finally bare clang with --target.
     generic_clang = os.path.join(host_bin, f"clang{exe_suffix}")
     if os.path.exists(generic_clang):
         return generic_clang
     return None
 
-def ensure_rules_generated():
+
+def ensure_rules_generated(langs):
     """Generate delta_rules_<lang>.{c,h} and delta_rules_shim_<lang>.c for each language."""
     print("Ensuring language rule bytecode tables are up-to-date...")
-    for lang in LANGS:
+    for lang in langs:
+        if lang == "jajp":
+            # Japanese has no rules-as-text; its three generated files are the
+            # only copy and are committed (see docs/japanese.md + .gitignore).
+            continue
         h_file = os.path.join(ROOT, "lang", lang, f"delta_rules_{lang}.h")
         c_file = os.path.join(ROOT, "lang", lang, f"delta_rules_{lang}.c")
         needs_gen = not (os.path.exists(h_file) and os.path.exists(c_file))
@@ -116,56 +161,126 @@ def ensure_rules_generated():
                 sys.exit(f"Rule generation failed for {lang}:\n{res.stdout}\n{res.stderr}")
     print("Rule tables ready.\n")
 
-def build_abi(abi, ndk_root, debug=False):
+
+def newest_header_mtime():
+    """Newest mtime of any header that engine sources can include."""
+    newest = 0.0
+    roots = [os.path.join(ROOT, "src"), os.path.join(ROOT, "include"),
+             os.path.join(ROOT, "lang"), os.path.join(ROOT, "lib"),
+             os.path.join(ROOT, "rom"), os.path.join(ROOT, "cli")]
+    for top in roots:
+        if not os.path.isdir(top):
+            continue
+        for dirpath, _dirnames, filenames in os.walk(top):
+            for fn in filenames:
+                if fn.endswith(HEADER_EXTS):
+                    try:
+                        mt = os.path.getmtime(os.path.join(dirpath, fn))
+                    except OSError:
+                        continue
+                    if mt > newest:
+                        newest = mt
+    return newest
+
+
+def build_abi(abi, ndk_root, debug=False, langs=None, api_override=None,
+              jobs=None, clean=False):
     if abi not in ABI_CONFIGS:
         sys.exit(f"Unknown ABI: {abi}. Available: {list(ABI_CONFIGS.keys())}")
-    
+
+    langs = list(langs or ALL_LANGS)
+    for l in langs:
+        if not os.path.isdir(os.path.join(ROOT, "lang", l)):
+            sys.exit(f"Unknown language '{l}'. Available: {ALL_LANGS}")
+
     cfg = ABI_CONFIGS[abi]
-    clang = find_clang_binary(ndk_root, cfg["triple"], cfg["api"])
+    api = api_override or cfg["api"]
+    clang = find_clang_binary(ndk_root, cfg["triple"], api)
     if not clang:
         sys.exit(f"Could not find NDK Clang compiler for {abi} in {ndk_root}")
-    
+
     mode_str = "DEBUG" if debug else "RELEASE (-O3)"
     print(f"=== Building EloQuick for Android ABI: {abi} [{mode_str}] ===")
-    print(f"Compiler: {clang}")
+    print(f"Compiler: {clang} (api {api})")
+    print(f"Languages: {','.join(langs)}")
 
     build_dir = os.path.join(ROOT, "build", "android", abi)
     obj_dir = os.path.join(build_dir, "obj_debug" if debug else "obj")
+    if clean:
+        import shutil
+        shutil.rmtree(obj_dir, ignore_errors=True)
     os.makedirs(obj_dir, exist_ok=True)
 
     langs_c = os.path.join(build_dir, "delta_langs.c")
     with open(langs_c, "w", encoding="utf-8") as f:
         f.write('/* Generated for Android build */\n#include "delta_lang.h"\n\n')
-        for l in LANGS:
+        for l in langs:
             f.write(f'extern delta_language delta_lang_{l};\n')
             f.write(f'void delta_lang_bind_{l}(void);\n')
         f.write('\nconst delta_language *const delta_languages[] = {\n')
-        for l in LANGS:
+        for l in langs:
             f.write(f'    &delta_lang_{l},\n')
         f.write('    0,\n};\n\n')
         f.write('void delta_lang_bind_all(void)\n{\n')
-        for l in LANGS:
+        for l in langs:
             f.write(f'    delta_lang_bind_{l}();\n')
         f.write('}\n')
 
     src_files = []
     src_dirs = [ROOT]
-    for root, dirs, files in os.walk(os.path.join(ROOT, "src")):
+    for root, _dirs, files in os.walk(os.path.join(ROOT, "src")):
         src_dirs.append(root)
-        for f in files:
-            if f.endswith(".c") and f != "port_win32.c":
-                src_files.append(os.path.join(root, f))
+        for fn in files:
+            if fn.endswith(".c") and fn != "port_win32.c":
+                src_files.append(os.path.join(root, fn))
 
     lang_files = [langs_c]
     lang_dirs = []
-    for l in LANGS:
+    for l in langs:
         lang_dir = os.path.join(ROOT, "lang", l)
         lang_dirs.append(lang_dir)
-        for f in os.listdir(lang_dir):
-            if f.endswith(".c") and not f.startswith("delta_rules_c"):
-                lang_files.append(os.path.join(lang_dir, f))
+        for fn in os.listdir(lang_dir):
+            if fn.endswith(".c") and not fn.startswith("delta_rules_c"):
+                lang_files.append(os.path.join(lang_dir, fn))
 
-    include_dirs = sorted(set(src_dirs + lang_dirs + [build_dir, os.path.join(ROOT, "include")]))
+    # Japanese romanizer (rom/jajp/): required when jajp is bundled.
+    rom_files = []
+    rom_dirs = []
+    rom_defs = []
+    if "jajp" in langs:
+        rom_dir = os.path.join(ROOT, "rom", "jajp")
+        if not os.path.isdir(rom_dir):
+            sys.exit("jajp selected but rom/jajp/ is missing")
+        rom_dirs.append(rom_dir)
+        for fn in os.listdir(rom_dir):
+            if fn.endswith(".c"):
+                rom_files.append(os.path.join(rom_dir, fn))
+        rom_defs.append("-DEVV_ROM_JAJP")
+
+    # JNI bridge, when the NDK sysroot provides <jni.h>. Checked by direct
+    # path (sysroot/usr/include/jni.h), not a tree walk -- the NDK is huge.
+    jni_files = []
+    jni_c = os.path.join(ROOT, "android", "eloquick_jni.c")
+    if os.path.exists(jni_c):
+        llvm_prebuilt = os.path.join(ndk_root, "toolchains", "llvm", "prebuilt")
+        found_jni = False
+        try:
+            hosts = os.listdir(llvm_prebuilt)
+        except OSError:
+            hosts = []
+        for host in hosts:
+            if os.path.exists(os.path.join(llvm_prebuilt, host, "sysroot",
+                                           "usr", "include", "jni.h")):
+                found_jni = True
+                break
+        if found_jni:
+            jni_files.append(jni_c)
+            print("JNI bridge: enabled (android/eloquick_jni.c)")
+        else:
+            print("JNI bridge: skipped (<jni.h> not found in NDK)")
+
+    include_dirs = sorted(set(src_dirs + lang_dirs + rom_dirs
+                              + [build_dir, os.path.join(ROOT, "include")]))
     inc_flags = [f"-I{d}" for d in include_dirs]
 
     opt_cflags = [
@@ -174,14 +289,10 @@ def build_abi(abi, ndk_root, debug=False):
         "-DDEBUG=1",
     ] if debug else [
         "-O3",
-        "-g",
         "-flto=thin",
         "-fno-math-errno",
         "-fno-trapping-math",
         "-ffp-contract=fast",
-        "-funroll-loops",
-        "-fvectorize",
-        "-fslp-vectorize",
     ]
 
     common_cflags = [
@@ -193,10 +304,11 @@ def build_abi(abi, ndk_root, debug=False):
         "-fvisibility=hidden",
         "-fPIC",
         "-w",
-        "-Wno-implicit-function-declaration",
         "-Werror=int-conversion",
         "-Werror=incompatible-pointer-types",
-    ] + opt_cflags + cfg["cflags"] + inc_flags
+    ] + opt_cflags + rom_defs + cfg["cflags"] + inc_flags
+
+    header_floor = newest_header_mtime()
 
     def compile_source(src):
         rel = os.path.relpath(src, ROOT)
@@ -204,19 +316,32 @@ def build_abi(abi, ndk_root, debug=False):
         base = os.path.splitext(os.path.basename(src))[0]
         obj = os.path.join(obj_dir, f"{base}_{h}.o")
 
-        if os.path.exists(obj) and os.path.getmtime(obj) > os.path.getmtime(src):
-            return obj
+        # Stale when the source OR any header is newer (see header_floor).
+        try:
+            if (os.path.exists(obj)
+                    and os.path.getmtime(obj) > os.path.getmtime(src)
+                    and os.path.getmtime(obj) > header_floor
+                    and os.path.getmtime(obj) > os.path.getmtime(langs_c)):
+                return obj
+        except OSError:
+            pass
 
         cmd = [clang, "-c", src, "-o", obj] + common_cflags
+        # Bare clang fallback needs an explicit --target.
+        if os.path.basename(clang).startswith("clang"):
+            cmd += [f"--target={cfg['triple']}{api}"]
         res = subprocess.run(cmd, capture_output=True, text=True)
         if res.returncode != 0:
             print(f"FAILED: {src}\n{res.stderr}", file=sys.stderr)
             return None
         return obj
 
-    core_sources = src_files + lang_files
-    print(f"Compiling {len(core_sources)} core sources [{'DEBUG' if debug else '-O3 release + ThinLTO + vectorization'}]...")
-    with ThreadPoolExecutor(max_workers=os.cpu_count() or 8) as ex:
+    # Compile once; link three times (two SONAMEs + one CLI). The old CMake
+    # compiled every source 4x; this script never did -- keep it that way.
+    core_sources = src_files + lang_files + rom_files
+    print(f"Compiling {len(core_sources)} core sources [{'DEBUG' if debug else '-O3 release + ThinLTO'}]...")
+    workers = jobs or os.cpu_count() or 8
+    with ThreadPoolExecutor(max_workers=workers) as ex:
         core_objs = list(ex.map(compile_source, core_sources))
 
     if any(o is None for o in core_objs):
@@ -227,10 +352,13 @@ def build_abi(abi, ndk_root, debug=False):
     if not cli_obj:
         sys.exit(f"CLI compilation failed for ABI: {abi}")
 
-    lib_src = os.path.join(ROOT, "lib", "eci_api.c")
-    lib_obj = compile_source(lib_src)
-    if not lib_obj:
-        sys.exit(f"Shared library wrapper compilation failed for ABI: {abi}")
+    lib_srcs = [os.path.join(ROOT, "lib", "eci_api.c")] + jni_files
+    lib_objs = []
+    for ls in lib_srcs:
+        o = compile_source(ls)
+        if not o:
+            sys.exit(f"Shared library wrapper compilation failed for ABI: {abi}")
+        lib_objs.append(o)
 
     linker_alignment_flags = [
         "-Wl,-z,max-page-size=16384",
@@ -268,6 +396,7 @@ def build_abi(abi, ndk_root, debug=False):
         sys.exit(f"CLI linking failed for ABI {abi}:\n{res.stderr}")
 
     import shutil
+    # CLI is argv[0]-aware: a copy is behaviour-identical, no second link.
     shutil.copy2(out_eloquick, out_evv)
 
     out_eloquick_so = os.path.join(build_dir, "libeloquick.so")
@@ -275,7 +404,7 @@ def build_abi(abi, ndk_root, debug=False):
     print(f"Linking shared library {out_eloquick_so}...")
     so_rsp = os.path.join(build_dir, "so_objects.rsp")
     with open(so_rsp, "w") as f:
-        for obj in core_objs + [lib_obj]:
+        for obj in core_objs + lib_objs:
             f.write(obj.replace("\\", "/") + "\n")
 
     link_so_cmd = [
@@ -293,7 +422,7 @@ def build_abi(abi, ndk_root, debug=False):
     if res.returncode != 0:
         sys.exit(f"Shared library linking failed for ABI {abi}:\n{res.stderr}")
 
-    # Also link/copy libopenevv.so for backwards compatibility
+    # Compat .so needs its own link (SONAME differs); same objects, no recompile.
     link_so_compat_cmd = [
         clang,
         "-o", out_openevv_so,
@@ -305,11 +434,22 @@ def build_abi(abi, ndk_root, debug=False):
         "-pthread",
         f"@{so_rsp}",
     ]
-    subprocess.run(link_so_compat_cmd, capture_output=True, text=True)
+    res = subprocess.run(link_so_compat_cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        sys.exit(f"Compat library linking failed for ABI {abi}:\n{res.stderr}")
 
     print(f"ABI {abi} Build Complete:")
     print(f"  CLI binary:     {out_eloquick} (also mirrored as {out_evv}) [{os.path.getsize(out_eloquick):,} bytes]")
     print(f"  Shared library: {out_eloquick_so} (also mirrored as {out_openevv_so}) [{os.path.getsize(out_eloquick_so):,} bytes]\n")
+
+
+def parse_langs(s):
+    langs = [x.strip() for x in s.split(",") if x.strip()]
+    for l in langs:
+        if l not in ALL_LANGS:
+            sys.exit(f"Unknown language '{l}'. Available: {ALL_LANGS}")
+    return langs
+
 
 def main():
     parser = argparse.ArgumentParser(description="Build EloQuick tailored for Android.")
@@ -324,19 +464,45 @@ def main():
         action="store_true",
         help="Build with debug symbols (-O0 -g) and unstripped binaries",
     )
+    parser.add_argument(
+        "--langs",
+        default=",".join(ALL_LANGS),
+        help=f"Comma-separated language subset (default: all ten). Available: {','.join(ALL_LANGS)}",
+    )
+    parser.add_argument(
+        "--api",
+        type=int,
+        default=None,
+        help="Override Android API level per ABI (default: per-ABI config)",
+    )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=None,
+        help="Parallel compile jobs (default: cpu count)",
+    )
+    parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Wipe cached objects for the selected ABI(s) before building",
+    )
     args = parser.parse_args()
 
     ndk_root = find_ndk_root()
     if not ndk_root:
         sys.exit("Error: Android NDK not found. Set ANDROID_NDK_HOME or ANDROID_NDK_ROOT.")
 
-    ensure_rules_generated()
+    langs = parse_langs(args.langs)
+    ensure_rules_generated(langs)
 
     if args.abi == "all":
         for abi in ABI_CONFIGS:
-            build_abi(abi, ndk_root, debug=args.debug)
+            build_abi(abi, ndk_root, debug=args.debug, langs=langs,
+                      api_override=args.api, jobs=args.jobs, clean=args.clean)
     else:
-        build_abi(args.abi, ndk_root, debug=args.debug)
+        build_abi(args.abi, ndk_root, debug=args.debug, langs=langs,
+                  api_override=args.api, jobs=args.jobs, clean=args.clean)
+
 
 if __name__ == "__main__":
     main()

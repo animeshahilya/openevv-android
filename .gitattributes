@@ -1,0 +1,12 @@
+# Normalize line endings: the engine tree is LF. This stops editors on Windows
+# from rewriting whole files (CRLF churn hid a 21-line change as ~2000 lines
+# in this repo's own history) while leaving WAVs and binaries untouched.
+* text=auto eol=lf
+*.wav binary
+*.so binary
+*.dll binary
+*.exe binary
+*.bin binary
+*.o binary
+*.a binary
+*.zip binary
