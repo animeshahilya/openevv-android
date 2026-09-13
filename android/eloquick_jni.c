@@ -2,7 +2,7 @@
  *
  * Java side: com.eloquick.tts.EloQuickEngine (see docs/android.md for the
  * Kotlin skeleton). All engine access goes through the published eci.h API;
- * nothing here reaches the engine's internal eo_*/es_* names, so the bridge
+ * nothing here reaches the engine's internal eo_ / es_ names, so the bridge
  * keeps working whatever the internals do.
  *
  * Two lessons from Eagalon/openevv's SAPI wrapper are built in rather than

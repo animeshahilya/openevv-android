@@ -293,6 +293,8 @@ def build_abi(abi, ndk_root, debug=False, langs=None, api_override=None,
         "-fno-math-errno",
         "-fno-trapping-math",
         "-ffp-contract=fast",
+        # No -g in release: -Wl,-s strips it at link time, so generating
+        # debug info for ~200 files would be pure build time for nothing.
     ]
 
     common_cflags = [
@@ -304,11 +306,20 @@ def build_abi(abi, ndk_root, debug=False, langs=None, api_override=None,
         "-fvisibility=hidden",
         "-fPIC",
         "-w",
+        # The engine predates prototypes in places (missing headers and
+        # K&R-era cross-file calls); NDK r28+ Clang errors on those by
+        # default. Upstream builds with the same suppression.
+        "-Wno-implicit-function-declaration",
         "-Werror=int-conversion",
         "-Werror=incompatible-pointer-types",
     ] + opt_cflags + rom_defs + cfg["cflags"] + inc_flags
 
     header_floor = newest_header_mtime()
+
+    # Bare-clang fallback (no versioned triple binary in this NDK) needs an
+    # explicit --target on every compile AND link; versioned triples imply it.
+    bare_clang = os.path.basename(clang).startswith("clang")
+    target_flag = [f"--target={cfg['triple']}{api}"] if bare_clang else []
 
     def compile_source(src):
         rel = os.path.relpath(src, ROOT)
@@ -326,10 +337,7 @@ def build_abi(abi, ndk_root, debug=False, langs=None, api_override=None,
         except OSError:
             pass
 
-        cmd = [clang, "-c", src, "-o", obj] + common_cflags
-        # Bare clang fallback needs an explicit --target.
-        if os.path.basename(clang).startswith("clang"):
-            cmd += [f"--target={cfg['triple']}{api}"]
+        cmd = [clang, "-c", src, "-o", obj] + common_cflags + target_flag
         res = subprocess.run(cmd, capture_output=True, text=True)
         if res.returncode != 0:
             print(f"FAILED: {src}\n{res.stderr}", file=sys.stderr)
@@ -386,7 +394,7 @@ def build_abi(abi, ndk_root, debug=False, langs=None, api_override=None,
         "-o", out_eloquick,
         "-pie",
         "-Wl,--gc-sections",
-    ] + strip_flags + opt_link_flags + linker_alignment_flags + [
+    ] + target_flag + strip_flags + opt_link_flags + linker_alignment_flags + [
         "-lm",
         "-pthread",
         f"@{cli_rsp}",
@@ -413,7 +421,7 @@ def build_abi(abi, ndk_root, debug=False, langs=None, api_override=None,
         "-shared",
         "-Wl,-soname,libeloquick.so",
         "-Wl,--gc-sections",
-    ] + strip_flags + opt_link_flags + linker_alignment_flags + [
+    ] + target_flag + strip_flags + opt_link_flags + linker_alignment_flags + [
         "-lm",
         "-pthread",
         f"@{so_rsp}",
@@ -429,7 +437,7 @@ def build_abi(abi, ndk_root, debug=False, langs=None, api_override=None,
         "-shared",
         "-Wl,-soname,libopenevv.so",
         "-Wl,--gc-sections",
-    ] + strip_flags + opt_link_flags + linker_alignment_flags + [
+    ] + target_flag + strip_flags + opt_link_flags + linker_alignment_flags + [
         "-lm",
         "-pthread",
         f"@{so_rsp}",

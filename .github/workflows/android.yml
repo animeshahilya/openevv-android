@@ -42,11 +42,14 @@ jobs:
           done
 
       - name: Smoke test CLI (x86_64 host)
+        # NOTE: Android binaries cannot execute on the Linux CI host (they
+        # need /system/bin/linker64), so this validates ELF shape instead of
+        # running. Real speech checks run on-device via tools/test_device.py.
         if: matrix.abi == 'x86_64'
         run: |
-          ./build/android/x86_64/eloquick -L list
-          ./build/android/x86_64/eloquick -o /tmp/smoke.wav "Hello from EloQuick."
-          python3 -c "import struct; d=open('/tmp/smoke.wav','rb').read(); assert d[:4]==b'RIFF' and d[8:12]==b'WAVE', 'not a WAV'; print('WAV OK', len(d), 'bytes')"
+          file build/android/x86_64/eloquick
+          $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -h build/android/x86_64/eloquick | grep -E "Machine|Type"
+          $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -l build/android/x86_64/eloquick | grep LOAD
 
       - name: Upload Binaries (${{ matrix.abi }})
         uses: actions/upload-artifact@v4

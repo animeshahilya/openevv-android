@@ -16,8 +16,8 @@ EloQuick is an ultra-fast C reimplementation of IBM's Embedded ViaVoice / ETI El
    Linked with `-Wl,-z,max-page-size=16384` to guarantee compatibility with Android 15+ devices requiring 16KB memory pages.
 5. **All 10 Bundled Languages Pre-Compiled**:
    US English (`enus`), German (`dede`), British English (`engb`), Castilian Spanish (`eses`), Latin American Spanish (`esus`), Canadian French (`frca`), European French (`frfr`), Italian (`itit`), Polish (`plpl`), and Japanese (`jajp`, with its `rom/jajp` romanizer) are directly bundled and bound. Trim with `--langs` / `-DOPENEVV_LANGS` for smaller APKs.
-6. **Bit-Exact Speech Output with Memory Arena**:
-   Uses `-DEVV_ARENA=1` with zero runtime allocations during synthesis to preserve certified Eloquence audio samples across ARM and x86 architectures with zero latency.
+6. **Deterministic Speech Output with Memory Arena**:
+   Uses `-DEVV_ARENA=1` with zero runtime allocations during synthesis for stable, low-latency audio across ARM and x86. (Deliberately not claimed bit-exact vs upstream: the `-ffp-contract=fast` / `-fno-math-errno` flags touch float DSP paths. The default integer formant pipeline is unaffected, and `test/matrix.sh` upstream is the arbiter if you need the proof.)
 7. **JNI Bridge (`android/eloquick_jni.c`)**:
    `com.eloquick.tts.EloQuickEngine` wrapper around the published ECI API: create/destroy per-language instances, synth to 11025 Hz PCM `short[]`, language listing, and param access. Built into both `.so`s automatically when `<jni.h>` is present; see "Using from Kotlin" below.
 
@@ -159,6 +159,20 @@ A build holds ten languages but speaks the first unless told which. List and pic
 ```bash
 adb shell "/data/local/tmp/evv -L list"
 adb shell "/data/local/tmp/evv -L 0x<id-from-list> -o /data/local/tmp/de.wav 'Guten Tag.'"
+```
+
+---
+
+## On-device testing
+
+`tools/test_device.py` pushes the ABI build to `/data/local/tmp/eqtest` on the connected phone and runs the full gate: usage, `-L list` (expects all ten languages), `-l` voices, per-language synthesis with WAV validation (RIFF/WAVE, 11025 Hz mono 16-bit, non-silent), repeat-synth determinism (same length; bytes legitimately differ — engine voicing state), EN/DE separation, `evv` compat parity, and the unknown-`-L` error path.
+
+```bash
+# Debug build first (unstripped, -O0 -g -- what you ship to a test phone):
+python tools/build_android.py --abi arm64-v8a --debug
+
+# Then the gate:
+python tools/test_device.py --abi arm64-v8a
 ```
 
 ---

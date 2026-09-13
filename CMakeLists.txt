@@ -36,6 +36,10 @@ add_compile_options(
     -ffp-contract=fast
     -fPIC
     -w
+    # The engine predates prototypes in places (missing headers and K&R-era
+    # cross-file calls); NDK r28+ Clang errors on those by default. Upstream
+    # builds with the same suppression.
+    -Wno-implicit-function-declaration
     -Werror=int-conversion
     -Werror=incompatible-pointer-types
 )

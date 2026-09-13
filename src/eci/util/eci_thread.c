@@ -86,8 +86,18 @@ extern void elgTraceLog(int32_t level, const char *fmt, ...);
 extern const ThreadVtbl vtbl_thread;
 
 /* The original names the thread it starts, and asks for forty thousand
-   bytes of stack. Both are its numbers, not ours. */
+   bytes of stack. Both are its numbers, not ours -- and forty thousand is
+   measured in optimized frames. An unoptimized (-O0 -DDEBUG) build spills
+   on the order of twenty kilobytes a level through the rule dispatcher, so
+   two nested rules already blow the thread (seen as SIGSEGV/stack-overflow
+   on Android, where this thread gets exactly what is asked). DEBUG builds
+   therefore ask for eight megabytes instead. It is virtual until touched,
+   and there is one such thread per instance. */
+#ifdef DEBUG
+#define THREAD_STACK 0x800000
+#else
 #define THREAD_STACK 0x9c40
+#endif
 #define THREAD_NAME  "ECIThrd"
 
 /* ---- the small ones -------------------------------------------------- */

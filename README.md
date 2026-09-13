@@ -7,6 +7,8 @@
 
 *Upstream engine by [Mudb0y/openevv](https://github.com/Mudb0y/openevv).*
 
+> **Scope: Android only.** The blessed paths in this fork are `tools/build_android.py` (NDK) and `CMakeLists.txt` (Gradle `externalNativeBuild` / `add_subdirectory`), targeting `arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`, plus the JNI bridge in `android/`. The inherited desktop scaffolding — root `Makefile`, `win/`, `speechd/`, `nvda/`, `reference/`, desktop docs — is kept for engine provenance and upstream merges, but it is **not built, tested, or supported here**. Android issues get fixed here; desktop issues belong upstream.
+
 ---
 
 ## Tailored for Android & Speed
