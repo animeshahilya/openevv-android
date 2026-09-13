@@ -50,6 +50,7 @@ public class MainActivity extends Activity {
     private Spinner voiceSpinner;
     private EditText textInput;
     private TextView status;
+    private Tts.StopFlag currentSpeech;
     private SeekBar speedBar;
     private TextView speedLabel;
     private EditText dictKey;
@@ -109,6 +110,15 @@ public class MainActivity extends Activity {
             }
         });
         root.addView(speak);
+        Button stop = new Button(this);
+        stop.setText("Stop");
+        stop.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                onStopPressed();
+            }
+        });
+        root.addView(stop);
 
         status.setText(statusLine("ready", langIds.length));
 
@@ -233,18 +243,50 @@ public class MainActivity extends Activity {
         });
         root.addView(rateSpinner);
 
+        // Becoming the system voice is a Settings act, not ours: one tap
+        // to the right screen.
+        Button ttsSettings = new Button(this);
+        ttsSettings.setText("System speech settings");
+        ttsSettings.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                try {
+                    startActivity(new android.content.Intent(
+                            "com.android.settings.TTS_SETTINGS"));
+                } catch (Exception e) {
+                    setStatus("system speech settings not found");
+                }
+            }
+        });
+        root.addView(ttsSettings);
+
         root.addView(status);
         setContentView(page);
 
         Bundle ex = getIntent() != null ? getIntent().getExtras() : null;
         handleExtras(ex);
+        try {
+            android.content.IntentFilter commands =
+                    new android.content.IntentFilter("com.eloquick.debug.STOP");
+            // EXPORTED so automation (adb shell, uid 2000) can reach it;
+            // the command only stops our own speech, nothing privileged.
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(commandReceiver, commands, RECEIVER_EXPORTED);
+            } else {
+                registerReceiver(commandReceiver, commands);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "command receiver failed", e);
+        }
     }
 
     @Override
     protected void onNewIntent(android.content.Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        handleExtras(intent != null ? intent.getExtras() : null);
+        Bundle b = intent != null ? intent.getExtras() : null;
+        Log.i(TAG, "onNewIntent extras=" + (b == null ? "null" : b.keySet().toString()));
+        handleExtras(b);
     }
 
     private void handleExtras(Bundle ex) {
@@ -253,6 +295,8 @@ public class MainActivity extends Activity {
             runSelfTest(play);
         } else if (ex != null && ex.getBoolean("fwtest", false)) {
             runFrameworkTest();
+        } else if (ex != null && ex.getBoolean("stop", false)) {
+            onStopPressed();
         } else if (ex != null && ex.containsKey("text")) {
             String t = ex.getString("text");
             int lang = parseLang(ex.getString("lang"), langIds.length > 0 ? langIds[0] : 0);
@@ -268,9 +312,26 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        try {
+            unregisterReceiver(commandReceiver);
+        } catch (Exception ignored) {
+        }
         bg.shutdownNow();
         super.onDestroy();
     }
+
+    /** Automation commands that must arrive even when activity-intent
+     *  redelivery stalls (observed: onNewIntent not firing mid-speech
+     *  behind the lock screen). am broadcast -a com.eloquick.debug.STOP */
+    private final android.content.BroadcastReceiver commandReceiver =
+            new android.content.BroadcastReceiver() {
+                @Override
+                public void onReceive(android.content.Context c, android.content.Intent i) {
+                    if (i == null || i.getAction() == null) return;
+                    Log.i(TAG, "command " + i.getAction());
+                    if ("com.eloquick.debug.STOP".equals(i.getAction())) onStopPressed();
+                }
+            };
 
     private int[] safeGetLanguages() {
         try {
@@ -333,28 +394,36 @@ public class MainActivity extends Activity {
         final int lang = selectedLang();
         final int voice = voiceSpinner.getSelectedItemPosition() + 1;
         final String text = textInput.getText().toString();
+        final Tts.StopFlag flag = new Tts.StopFlag();
+        currentSpeech = flag;
         setStatus("speaking lang=0x" + Integer.toHexString(lang)
                 + " voice=" + voice + " ...");
         bg.execute(new Runnable() {
             @Override
             public void run() {
-                final Tts.Result r = Tts.speak(lang, voice, text, true);
+                final Tts.Result r = Tts.speakStream(lang, voice, text, true, flag);
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        setStatus(r.ok
-                                ? ("done: " + r.samples + " samples, synth "
-                                        + r.synthMs + "ms, play " + r.playMs + "ms")
+                        setStatus(r.stopped ? "stopped"
+                                : r.ok
+                                ? ("done: " + r.samples + " samples, " + r.synthMs + "ms")
                                 : ("FAILED: " + r.error));
                     }
                 });
                 Log.i(TAG, "speak lang=0x" + Integer.toHexString(lang)
-                        + " voice=" + voice + " ok=" + r.ok
-                        + " samples=" + r.samples + " synthMs=" + r.synthMs
-                        + " playMs=" + r.playMs
+                        + " voice=" + voice + " ok=" + r.ok + " stopped=" + r.stopped
+                        + " samples=" + r.samples + " ms=" + r.synthMs
                         + (r.error != null ? " err=" + r.error : ""));
             }
         });
+    }
+
+    private void onStopPressed() {
+        Tts.StopFlag flag = currentSpeech;
+        Log.i(TAG, "stop pressed, current=" + (flag != null));
+        if (flag != null) flag.stop = true;
+        setStatus("stopping ...");
     }
 
     private void setStatus(String s) {
@@ -634,6 +703,60 @@ public class MainActivity extends Activity {
                         fail++;
                     }
                     Log.i(TAG, "selftest wednesday status=" + (wedOk ? "OK" : "FAIL"));
+                }
+                // SpeechRate curve: unit checks on the ported table.
+                {
+                    boolean rate_curveOk = com.eloquick.tts.SpeechRate.speedForPercent(50, 100) == 50
+                            && Math.abs(com.eloquick.tts.SpeechRate.timesFor(50) - 1.0) < 1e-9
+                            && com.eloquick.tts.SpeechRate.speedFor(1.0) == 50
+                            && com.eloquick.tts.SpeechRate.speedForPercent(50, 200)
+                            == com.eloquick.tts.SpeechRate.speedFor(
+                                    com.eloquick.tts.SpeechRate.timesFor(50) * 2.0);
+                    if (rate_curveOk) {
+                        ok++;
+                    } else {
+                        fail++;
+                    }
+                    Log.i(TAG, "selftest speechrate status=" + (rate_curveOk ? "OK" : "FAIL"));
+                }
+                // Interrupt endurance: 20 rapid speak/partial/stop cycles on
+                // one language. evvdroid's InterruptEnduranceTest thinking:
+                // stops must keep working hundreds of times over.
+                if (ids.length > 0) {
+                    int cyclesOk = 0;
+                    String longText = "Hello world. This is EloQuick speaking. "
+                            + "The quick brown fox jumps over the lazy dog. "
+                            + "Pack my box with five dozen liquor jugs.";
+                    for (int c = 0; c < 20; c++) {
+                        long st = 0;
+                        try {
+                            st = EloQuickEngine.nativeStreamCreate(ids[0]);
+                            if (st == 0) break;
+                            if (!EloQuickEngine.nativeStreamSpeak(st, longText)) break;
+                            byte[] buf = new byte[4096];
+                            int first = EloQuickEngine.nativeStreamRead(st, buf, buf.length);
+                            EloQuickEngine.nativeStreamStop(st);
+                            int after = EloQuickEngine.nativeStreamRead(st, buf, buf.length);
+                            if (first > 0 && after == -1) cyclesOk++;
+                        } catch (UnsatisfiedLinkError e) {
+                            Log.e(TAG, "selftest endurance missing", e);
+                            break;
+                        } finally {
+                            if (st != 0) {
+                                try {
+                                    EloQuickEngine.nativeStreamDestroy(st);
+                                } catch (UnsatisfiedLinkError ignored) {
+                                }
+                            }
+                        }
+                    }
+                    if (cyclesOk == 20) {
+                        ok++;
+                    } else {
+                        fail++;
+                    }
+                    Log.i(TAG, "selftest endurance status="
+                            + (cyclesOk == 20 ? "OK" : "FAIL") + " cycles=" + cyclesOk + "/20");
                 }
                 // Heteronym filter: creation-time property. Default on for one
                 // instance, off for another; a heteronym-heavy line must

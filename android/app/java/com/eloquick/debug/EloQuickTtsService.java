@@ -305,14 +305,14 @@ public class EloQuickTtsService extends TextToSpeechService {
         String raw = request.getCharSequenceText() == null ? ""
                 : request.getCharSequenceText().toString();
         if (EqPrefs.wednesdayGuard(this)) raw = EqText.wednesdayGuard(raw);
-        String text = "`vs" + Eci.clampVoice(Eci.VOICE_SPEED, speed)
-                + " `vb" + Eci.clampVoice(Eci.VOICE_PITCH_BASELINE, pitch)
-                + " `pp0 " + raw;
-        if (text.trim().isEmpty()) {
+        if (raw.trim().isEmpty()) {
             callback.start(hz, AudioFormat.ENCODING_PCM_16BIT, 1);
             callback.done();
             return;
         }
+        String text = "`vs" + Eci.clampVoice(Eci.VOICE_SPEED, speed)
+                + " `vb" + Eci.clampVoice(Eci.VOICE_PITCH_BASELINE, pitch)
+                + " `pp0 " + raw;
         if (!EloQuickEngine.nativeStreamSpeak(s, text)) {
             callback.error(TextToSpeech.ERROR_SYNTHESIS);
             return;

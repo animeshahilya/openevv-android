@@ -215,7 +215,10 @@ The debug app is a small real app, not just a harness. Sections:
 - **Pronunciation dictionary**: teach key/say pairs, tap to forget. Stored as key-TAB-say in device-protected storage, loaded per service instance; each key expanded to its case forms (the engine matches exact bytes). Files over 256 KB are refused rather than loaded (hundred-thousand-entry dictionaries hang the engine -- measured upstream of here).
 - **Reading**: heteronym-correction toggle (creation-time, off default), engine sample-rate choice, Wednesday-misspelling guard (on default).
 
-All settings live in device-protected `SharedPreferences`, so the directBootAware service reads them before first unlock; the service recreates its session whenever language, preset, speed, hetero, rate or dictionary revision changes. Intent automation (`text`/`lang`/`voice`, `selftest`, `fwtest`) is unchanged.
+All settings live in device-protected `SharedPreferences`, so the directBootAware service reads them before first unlock; the service recreates its session whenever language, preset, speed, hetero, rate or dictionary revision changes. Intent automation (`text`/`lang`/`voice`, `selftest`, `fwtest`) is unchanged, plus:
+
+- **Stop button** (streaming speech, abortable mid-flight) and `am broadcast -a com.eloquick.debug.STOP` for automation. The receiver is exported so shell-driven tests reach it; the command only stops our own speech. Note: dynamic receivers must be registered EXPORTED on API 33+ or cross-uid broadcasts are silently dropped -- measured here, not guessed.
+- **System speech settings** button jumping to the TTS settings screen (becoming the default voice stays the user's explicit act).
 
 `tools/test_device.py` pushes the ABI build to `/data/local/tmp/eqtest` on the connected phone and runs the full gate: usage, `-L list` (expects all ten languages), `-l` voices, per-language synthesis with WAV validation (RIFF/WAVE, 11025 Hz mono 16-bit, non-silent), repeat-synth determinism (same length; bytes legitimately differ — engine voicing state), EN/DE separation, `evv` compat parity, and the unknown-`-L` error path.
 
