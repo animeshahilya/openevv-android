@@ -19,7 +19,9 @@ EloQuick is an ultra-fast C reimplementation of IBM's Embedded ViaVoice / ETI El
 6. **Deterministic Speech Output with Memory Arena**:
    Uses `-DEVV_ARENA=1` with zero runtime allocations during synthesis for stable, low-latency audio across ARM and x86. (Deliberately not claimed bit-exact vs upstream: the `-ffp-contract=fast` / `-fno-math-errno` flags touch float DSP paths. The default integer formant pipeline is unaffected, and `test/matrix.sh` upstream is the arbiter if you need the proof.)
 7. **JNI Bridge (`android/eloquick_jni.c`)**:
-   `com.eloquick.tts.EloQuickEngine` wrapper around the published ECI API: create/destroy per-language instances, synth to 11025 Hz PCM `short[]`, language listing, and param access. Built into both `.so`s automatically when `<jni.h>` is present; see "Using from Kotlin" below.
+   `com.eloquick.tts.EloQuickEngine` wrapper around the published ECI API: create/destroy per-language instances, whole-utterance synth to 11025 Hz PCM `short[]`, **streaming** (`nativeStreamCreate/Speak/Read/Stop/Destroy` for TalkBack-style stoppable playback), **dictionary** teach/lookup/forget, opt-in **heteronym** default, **sample-rate** selection (engine upsamples itself above 11025), voice shaping. Built into both `.so`s automatically when `<jni.h>` is present; see "Using from Kotlin" below.
+8. **System TTS Service (`EloQuickTtsService`)**:
+   A real `TextToSpeechService` in the debug app: 10 languages × 8 presets (Reed…Grandpa) as framework voices, locale matching, per-utterance rate/pitch via `` `vs ``/`` `vb `` annotations, 22050 Hz output, paced handover (≤300 ms ahead so rapid swipes don't queue unheard items), stoppable streams. Plus the framework-required check-data/sample-text activities.
 
 ---
 
@@ -129,8 +131,20 @@ object EloQuickEngine {
     @JvmStatic external fun nativeSynth(handle: Long, text: String): ShortArray?
     @JvmStatic external fun nativeSetParam(handle: Long, param: Int, value: Int): Int
     @JvmStatic external fun nativeGetParam(handle: Long, param: Int): Int
+    // streaming, dictionary, heteronym default, sample rate, voices...
+    // (see android/app/java/com/eloquick/tts/EloQuickEngine.java)
 }
 ```
+
+Feature debts paid to sibling repos (all credited in code): the streaming
+ring/worker/abort protocol, ECI tables, locale/preset/rate tables and the
+creation-time heteronym model come from trypsynth/evvdroid (MIT) and
+animeshahilya/eloquence-revived; the crashers landing and CLI `-A` from
+Mudb0y/openevv upstream. What was deliberately NOT taken: evvdroid's
+settings UI/prosody stack (service pins sane defaults instead), file-based
+dictionary loads (the engine loader wants IBM's binary form -- words are
+taught as text), SSML filter (no service path needs it yet), Hindi/Amharic
+halves (unfinished upstream of their own repos).
 
 Notes:
 - Always resolve the language via `nativeGetLanguages()` first, then `nativeCreate(lang)`. Creating on a cold registry without binding is how sibling SAPI work ended up with every voice speaking US English; the bridge binds before creating, but callers should still pass a listed id rather than a guess.
@@ -174,7 +188,16 @@ adb shell am start -n com.eloquick.debug/com.eloquick.debug.MainActivity --ez se
 adb logcat -s EQTEST
 ```
 
-Proven on Pixel 8: self-test 19/0 with and without audio playback, directed DE utterance plays through the speaker (playMs ≈ audio length), 600 monkey events with no crash/ANR.
+The self-test covers: all listed languages, bad-language refusal, voices
+1–8, streaming drain, stop-mid-flight, dictionary teach/lookup/forget,
+heteronym on-vs-off rendering, and 22050/fallback sample rates. The
+framework loop through the service gets its own mode:
+
+```bash
+adb shell am start -n com.eloquick.debug/com.eloquick.debug.MainActivity --ez fwtest true
+```
+
+Proven on Pixel 8: self-test 24/0 with and without audio playback, directed DE utterance plays through the speaker (playMs ≈ audio length), framework client speaks through the binder service to onDone, 600 monkey events with no crash/ANR.
 
 `tools/test_device.py` pushes the ABI build to `/data/local/tmp/eqtest` on the connected phone and runs the full gate: usage, `-L list` (expects all ten languages), `-l` voices, per-language synthesis with WAV validation (RIFF/WAVE, 11025 Hz mono 16-bit, non-silent), repeat-synth determinism (same length; bytes legitimately differ — engine voicing state), EN/DE separation, `evv` compat parity, and the unknown-`-L` error path.
 

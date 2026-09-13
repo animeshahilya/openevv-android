@@ -27,10 +27,12 @@ import java.util.concurrent.Executors;
  *   am start -n com.eloquick.debug/com.eloquick.debug.MainActivity \
  *     --es text "Hello" --es lang 0x10000 --ei voice 2
  *   am start ... --ez selftest true [--ez playaudi false]
+ *   am start ... --ez fwtest true   (full framework loop through our service)
  *
  * Self-test logs EQTEST lines and a final EQTEST RESULT ok=N fail=M:
  * every listed language synths (and optionally plays), an unknown language
- * is refused, and voice presets 1-8 each copy. Drive it with logcat:
+ * is refused, voice presets 1-8 each copy, plus streaming/dictionary/
+ * heteronym/rate checks. Drive it with logcat:
  *   adb logcat -s EQTEST -e "EQTEST"   (after clearing: logcat -c)
  */
 public class MainActivity extends Activity {
@@ -103,6 +105,8 @@ public class MainActivity extends Activity {
         if (ex != null && ex.getBoolean("selftest", false)) {
             boolean play = ex.getBoolean("playaudio", true);
             runSelfTest(play);
+        } else if (ex != null && ex.getBoolean("fwtest", false)) {
+            runFrameworkTest();
         } else if (ex != null && ex.containsKey("text")) {
             String t = ex.getString("text");
             int lang = parseLang(ex.getString("lang"), langIds.length > 0 ? langIds[0] : 0);
@@ -267,6 +271,185 @@ public class MainActivity extends Activity {
                                 + " samples=" + r.samples);
                     }
                 }
+                // Streaming: queue once, drain to the end, count bytes.
+                if (ids.length > 0) {
+                    long st = 0;
+                    int total = 0;
+                    int chunks = 0;
+                    boolean streamOk = false;
+                    try {
+                        st = EloQuickEngine.nativeStreamCreate(ids[0]);
+                        if (st != 0 && EloQuickEngine.nativeStreamSpeak(st,
+                                "Hello world. This is EloQuick speaking.")) {
+                            byte[] buf = new byte[8192];
+                            for (;;) {
+                                int n = EloQuickEngine.nativeStreamRead(st, buf, buf.length);
+                                if (n < 0) break;
+                                if (n == 0) {
+                                    streamOk = total > 0;
+                                    break;
+                                }
+                                total += n;
+                                chunks++;
+                            }
+                        }
+                    } catch (UnsatisfiedLinkError e) {
+                        Log.e(TAG, "selftest stream missing", e);
+                    } finally {
+                        if (st != 0) {
+                            try {
+                                EloQuickEngine.nativeStreamDestroy(st);
+                            } catch (UnsatisfiedLinkError ignored) {
+                            }
+                        }
+                    }
+                    if (streamOk) {
+                        ok++;
+                    } else {
+                        fail++;
+                    }
+                    Log.i(TAG, "selftest stream status=" + (streamOk ? "OK" : "FAIL")
+                            + " bytes=" + total + " chunks=" + chunks);
+                }
+                // Stop mid-flight: speak long, read once, stop, read => -1.
+                if (ids.length > 0) {
+                    long st = 0;
+                    boolean stopOk = false;
+                    try {
+                        st = EloQuickEngine.nativeStreamCreate(ids[0]);
+                        if (st != 0 && EloQuickEngine.nativeStreamSpeak(st,
+                                "Hello world. This is EloQuick speaking. "
+                                        + "The quick brown fox jumps over the lazy dog.")) {
+                            byte[] buf = new byte[8192];
+                            int first = EloQuickEngine.nativeStreamRead(st, buf, buf.length);
+                            EloQuickEngine.nativeStreamStop(st);
+                            int after = EloQuickEngine.nativeStreamRead(st, buf, buf.length);
+                            stopOk = first > 0 && after == -1;
+                            Log.i(TAG, "selftest stop first=" + first + " after=" + after);
+                        }
+                    } catch (UnsatisfiedLinkError e) {
+                        Log.e(TAG, "selftest stop missing", e);
+                    } finally {
+                        if (st != 0) {
+                            try {
+                                EloQuickEngine.nativeStreamDestroy(st);
+                            } catch (UnsatisfiedLinkError ignored) {
+                            }
+                        }
+                    }
+                    if (stopOk) {
+                        ok++;
+                    } else {
+                        fail++;
+                    }
+                    Log.i(TAG, "selftest stop status=" + (stopOk ? "OK" : "FAIL"));
+                }
+                // Dictionary round-trip: teach, look up, forget.
+                if (ids.length > 0) {
+                    long h = 0;
+                    boolean dictOk = false;
+                    try {
+                        h = EloQuickEngine.nativeCreate(ids[0]);
+                        if (h != 0
+                                && EloQuickEngine.nativeDictTeach(h, 0, "eqwtest", "hello") == 0) {
+                            String got = EloQuickEngine.nativeDictLookup(h, 0, "eqwtest");
+                            EloQuickEngine.nativeDictForget(h);
+                            String gone = EloQuickEngine.nativeDictLookup(h, 0, "eqwtest");
+                            dictOk = "hello".equals(got) && gone == null;
+                            Log.i(TAG, "selftest dict lookup=" + got + " afterForget=" + gone);
+                        }
+                    } catch (UnsatisfiedLinkError e) {
+                        Log.e(TAG, "selftest dict missing", e);
+                    } finally {
+                        if (h != 0) {
+                            try {
+                                EloQuickEngine.nativeDestroy(h);
+                            } catch (UnsatisfiedLinkError ignored) {
+                            }
+                        }
+                    }
+                    if (dictOk) {
+                        ok++;
+                    } else {
+                        fail++;
+                    }
+                    Log.i(TAG, "selftest dict status=" + (dictOk ? "OK" : "FAIL"));
+                }
+                // Heteronym filter: creation-time property. Default on for one
+                // instance, off for another; a heteronym-heavy line must
+                // render differently (either probe suffices).
+                if (ids.length > 0) {
+                    boolean hetOk = false;
+                    try {
+                        String[] probes = {"They will transport it.",
+                                "I produce music at home."};
+                        boolean differ = false;
+                        for (String probe : probes) {
+                            EloQuickEngine.nativeSetHeteroDefault(false);
+                            long hOff = EloQuickEngine.nativeCreate(ids[0]);
+                            EloQuickEngine.nativeSetHeteroDefault(true);
+                            long hOn = EloQuickEngine.nativeCreate(ids[0]);
+                            EloQuickEngine.nativeSetHeteroDefault(false);
+                            short[] a = hOff != 0
+                                    ? EloQuickEngine.nativeSynth(hOff, probe) : null;
+                            short[] b = hOn != 0
+                                    ? EloQuickEngine.nativeSynth(hOn, probe) : null;
+                            if (hOff != 0) EloQuickEngine.nativeDestroy(hOff);
+                            if (hOn != 0) EloQuickEngine.nativeDestroy(hOn);
+                            boolean d = a != null && b != null
+                                    && !java.util.Arrays.equals(a, b);
+                            if (d) differ = true;
+                            Log.i(TAG, "selftest hetero probe='" + probe + "' differ=" + d
+                                    + " offLen=" + (a == null ? -1 : a.length)
+                                    + " onLen=" + (b == null ? -1 : b.length));
+                        }
+                        hetOk = differ;
+                    } catch (UnsatisfiedLinkError e) {
+                        Log.e(TAG, "selftest hetero missing", e);
+                    } finally {
+                        try {
+                            EloQuickEngine.nativeSetHeteroDefault(false);
+                        } catch (UnsatisfiedLinkError ignored) {
+                        }
+                    }
+                    if (hetOk) {
+                        ok++;
+                    } else {
+                        fail++;
+                    }
+                    Log.i(TAG, "selftest hetero status=" + (hetOk ? "OK" : "FAIL"));
+                }
+                // Sample rate: 22050 holds and roughly doubles the frames;
+                // unknown rates fall back to 11025.
+                if (ids.length > 0) {
+                    boolean rateOk = false;
+                    try {
+                        long h = EloQuickEngine.nativeCreate(ids[0]);
+                        if (h != 0) {
+                            int got = EloQuickEngine.nativeSetSampleRateHz(h, 22050);
+                            short[] hi = EloQuickEngine.nativeSynth(h, "Hello world.");
+                            EloQuickEngine.nativeDestroy(h);
+                            long h2 = EloQuickEngine.nativeCreate(ids[0]);
+                            int fallback = EloQuickEngine.nativeSetSampleRateHz(h2, 12345);
+                            short[] lo = EloQuickEngine.nativeSynth(h2, "Hello world.");
+                            EloQuickEngine.nativeDestroy(h2);
+                            double ratio = (lo != null && lo.length > 0 && hi != null)
+                                    ? (double) hi.length / lo.length : 0;
+                            rateOk = got == 22050 && fallback == 11025
+                                    && ratio > 1.9 && ratio < 2.1;
+                            Log.i(TAG, "selftest rate got=" + got + " fallback=" + fallback
+                                    + " ratio=" + ratio);
+                        }
+                    } catch (UnsatisfiedLinkError e) {
+                        Log.e(TAG, "selftest rate missing", e);
+                    }
+                    if (rateOk) {
+                        ok++;
+                    } else {
+                        fail++;
+                    }
+                    Log.i(TAG, "selftest rate status=" + (rateOk ? "OK" : "FAIL"));
+                }
                 final int fok = ok;
                 final int ffail = fail;
                 Log.i(TAG, "RESULT ok=" + fok + " fail=" + ffail);
@@ -278,5 +461,94 @@ public class MainActivity extends Activity {
                 });
             }
         });
+    }
+
+    /** Full framework loop through our own TTS service: client -> binder ->
+     *  EloQuickTtsService -> engine -> audioAvailable. No system default is
+     *  changed; the client binds by explicit package. */
+    private void runFrameworkTest() {
+        setStatus("framework test running ...");
+        bg.execute(new Runnable() {
+            @Override
+            public void run() {
+                final java.util.concurrent.CountDownLatch done =
+                        new java.util.concurrent.CountDownLatch(1);
+                final boolean[] passed = {false};
+                final String[] detail = {""};
+                try {
+                    final android.speech.tts.TextToSpeech[] holder =
+                            new android.speech.tts.TextToSpeech[1];
+                    holder[0] = new android.speech.tts.TextToSpeech(MainActivity.this,
+                            new android.speech.tts.TextToSpeech.OnInitListener() {
+                                @Override
+                                public void onInit(int status) {
+                                    if (status != android.speech.tts.TextToSpeech.SUCCESS) {
+                                        detail[0] = "init status=" + status;
+                                        done.countDown();
+                                        return;
+                                    }
+                                    runOnUiThread(new Runnable() {
+                                        @Override
+                                        public void run() {
+                                            speakViaFramework(holder[0], done, passed, detail);
+                                        }
+                                    });
+                                }
+                            }, "com.eloquick.debug");
+                    if (!done.await(45, java.util.concurrent.TimeUnit.SECONDS)) {
+                        detail[0] = "timeout waiting for utterance";
+                    }
+                    try {
+                        holder[0].shutdown();
+                    } catch (Exception ignored) {
+                    }
+                } catch (Exception e) {
+                    detail[0] = "exception: " + e;
+                    done.countDown();
+                }
+                Log.i(TAG, "FW status=" + (passed[0] ? "OK" : "FAIL") + " " + detail[0]);
+                final boolean fp = passed[0];
+                final String fd = detail[0];
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        setStatus("framework test " + (fp ? "OK " : "FAIL ") + fd);
+                    }
+                });
+            }
+        });
+    }
+
+    private void speakViaFramework(final android.speech.tts.TextToSpeech tts,
+                                   final java.util.concurrent.CountDownLatch done,
+                                   final boolean[] passed, final String[] detail) {
+        tts.setOnUtteranceProgressListener(new android.speech.tts.UtteranceProgressListener() {
+            @Override
+            public void onStart(String id) {
+                Log.i(TAG, "FW onStart " + id);
+            }
+
+            @Override
+            public void onDone(String id) {
+                passed[0] = true;
+                detail[0] = "utterance " + id + " done";
+                done.countDown();
+            }
+
+            @Override
+            public void onError(String id) {
+                detail[0] = "utterance " + id + " error";
+                done.countDown();
+            }
+        });
+        int lang = tts.setLanguage(java.util.Locale.US);
+        Log.i(TAG, "FW setLanguage(US)=" + lang);
+        int rc = tts.speak("Hello from the framework loop.", android.speech.tts.TextToSpeech.QUEUE_FLUSH,
+                null, "eq-fw-1");
+        Log.i(TAG, "FW speak rc=" + rc);
+        if (rc != android.speech.tts.TextToSpeech.SUCCESS) {
+            detail[0] = "speak rc=" + rc;
+            done.countDown();
+        }
     }
 }

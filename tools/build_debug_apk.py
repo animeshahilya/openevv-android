@@ -150,11 +150,19 @@ def main():
     unaligned = os.path.join(work, "unaligned.apk")
     if os.path.exists(unaligned):
         os.remove(unaligned)
-    run([aapt2, "link", "-o", unaligned, "-I", android_jar,
-         "--manifest", os.path.join(APP, "AndroidManifest.xml"),
-         "--min-sdk-version", str(MIN_SDK),
-         "--target-sdk-version", str(level),
-         "--version-code", "1", "--version-name", "1.0-debug"])
+    link_cmd = [aapt2, "link", "-o", unaligned, "-I", android_jar,
+                "--manifest", os.path.join(APP, "AndroidManifest.xml"),
+                "--min-sdk-version", str(MIN_SDK),
+                "--target-sdk-version", str(level),
+                "--version-code", "1", "--version-name", "1.0-debug"]
+    res_dir = os.path.join(APP, "res")
+    if os.path.isdir(res_dir):
+        res_zip = os.path.join(work, "res.zip")
+        if os.path.exists(res_zip):
+            os.remove(res_zip)
+        run([aapt2, "compile", "--dir", res_dir, "-o", res_zip])
+        link_cmd += ["-R", res_zip]
+    run(link_cmd)
 
     dex_files = glob.glob(os.path.join(dex, "**", "*.dex"), recursive=True)
     if not dex_files:

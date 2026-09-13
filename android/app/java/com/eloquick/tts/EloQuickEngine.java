@@ -23,4 +23,33 @@ public final class EloQuickEngine {
     public static native int nativeCopyVoice(long handle, int from, int to);
     public static native int nativeSetVoiceParam(long handle, int voice, int param, int value);
     public static native int nativeGetVoiceParam(long handle, int voice, int param);
+    /** Engine output rate in Hz (8000/11025/22050/16000/32000/44100/48000);
+     *  answers the rate now in force. Above 11025 the engine upsamples itself. */
+    public static native int nativeSetSampleRateHz(long handle, int hz);
+    public static native String nativeVersion();
+    /** Teach one word in a dictionary volume (0 main, 1 root, 2 abbrev);
+     *  0 is success. Prefer over file loads: the engine loader wants IBM's
+     *  binary form, taught words take text. */
+    public static native int nativeDictTeach(long handle, int volume, String key, String say);
+    /** What a key was taught, or null. */
+    public static native String nativeDictLookup(long handle, int volume, String key);
+    /** Back to the language's own dictionary. */
+    public static native void nativeDictForget(long handle);
+    /** Heteronym correction default for instances created afterwards
+     *  (creation-time property: hetero_install runs at instance setup, so
+     *  toggling wants a new instance). Off default: a loaded filter turns
+     *  annotation reading on, so backticks in plain text get interpreted. */
+    public static native void nativeSetHeteroDefault(boolean on);
+    /** Streaming: queue text (answers at once), pull PCM bytes (0 = end,
+     *  -1 = stopped/error), abort mid-flight, destroy the session. */
+    public static native long nativeStreamCreate(int language);
+    public static native boolean nativeStreamSpeak(long stream, String text);
+    public static native int nativeStreamRead(long stream, byte[] dst, int max);
+    public static native void nativeStreamStop(long stream);
+    public static native void nativeStreamDestroy(long stream);
+    /** Stream-instance controls for the TTS service (voice shaping, rate). */
+    public static native int nativeStreamCopyVoice(long stream, int from, int to);
+    public static native int nativeStreamSetVoiceParam(long stream, int voice, int param, int value);
+    public static native int nativeStreamGetVoiceParam(long stream, int voice, int param);
+    public static native int nativeStreamSetSampleRateHz(long stream, int hz);
 }
