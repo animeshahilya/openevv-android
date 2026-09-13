@@ -63,10 +63,12 @@ public class MainActivity extends Activity {
 
         langIds = safeGetLanguages();
 
+        ScrollView page = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         int pad = (int) (16 * getResources().getDisplayMetrics().density);
         root.setPadding(pad, pad, pad, pad);
+        page.addView(root);
 
         langSpinner = new Spinner(this);
         voiceSpinner = new Spinner(this);
@@ -93,7 +95,12 @@ public class MainActivity extends Activity {
             public void onNothingSelected(AdapterView<?> p) {
             }
         });
+
+        // ---- Say: what to hear ----
+        root.addView(sectionHeader("Say"));
+        textInput.setHint("Type something to hear it");
         textInput.setText("Hello from EloQuick on Android.");
+        root.addView(labeled("Text", textInput));
         speak.setText("Speak");
         speak.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -101,22 +108,21 @@ public class MainActivity extends Activity {
                 onSpeakPressed();
             }
         });
+        root.addView(speak);
 
         status.setText(statusLine("ready", langIds.length));
 
-        root.addView(langSpinner);
-        root.addView(voiceSpinner);
-        root.addView(textInput);
-        root.addView(speak);
-
-        // ---- Voice tuning: preset persists above; speed shapes voice 0 ----
-        root.addView(sectionHeader("Voice tuning"));
+        // ---- Voice: who says it ----
+        root.addView(sectionHeader("Voice"));
+        root.addView(labeled("Language", langSpinner));
+        root.addView(labeled("Voice", voiceSpinner));
         speedLabel = new TextView(this);
-        root.addView(speedLabel);
+        updateSpeedLabel(EqPrefs.speed(this));
+        root.addView(labeled("Speed", speedLabel));
         speedBar = new SeekBar(this);
         speedBar.setMax(Eci.SPEED_MAX);
+        speedBar.setContentDescription("Speech speed");
         speedBar.setProgress(EqPrefs.speed(this));
-        updateSpeedLabel(EqPrefs.speed(this));
         speedBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar bar, int value, boolean fromUser) {
@@ -133,24 +139,18 @@ public class MainActivity extends Activity {
             }
         });
         root.addView(speedBar);
-        Button preview = new Button(this);
-        preview.setText("Preview voice");
-        preview.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                onSpeakPressed();
-            }
-        });
-        root.addView(preview);
 
-        // ---- Dictionary: key TAB say entries, tap one to delete ----
-        root.addView(sectionHeader("Pronunciation dictionary"));
+        // ---- Pronunciation: teach words, tap one to forget it ----
+        root.addView(sectionHeader("Pronunciation"));
+        TextView dictHelp = new TextView(this);
+        dictHelp.setText("Teach the engine a word, then tap it below to forget it.");
+        root.addView(dictHelp);
         dictKey = new EditText(this);
         dictKey.setHint("word as written");
-        root.addView(dictKey);
+        root.addView(labeled("Word", dictKey));
         dictSay = new EditText(this);
         dictSay.setHint("say instead");
-        root.addView(dictSay);
+        root.addView(labeled("Say instead", dictSay));
         Button dictAdd = new Button(this);
         dictAdd.setText("Teach word");
         dictAdd.setOnClickListener(new View.OnClickListener() {
@@ -178,10 +178,10 @@ public class MainActivity extends Activity {
         root.addView(dictList);
         refreshDictList();
 
-        // ---- Reading: hetero, quality, Wednesday guard ----
+        // ---- Reading: how it reads ----
         root.addView(sectionHeader("Reading"));
         CheckBox heteroBox = new CheckBox(this);
-        heteroBox.setText("Heteronym correction (experimental)");
+        heteroBox.setText("Say 'transport' right, noun and verb (experimental)");
         heteroBox.setChecked(EqPrefs.hetero(this));
         heteroBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
@@ -191,7 +191,7 @@ public class MainActivity extends Activity {
         });
         root.addView(heteroBox);
         CheckBox wedBox = new CheckBox(this);
-        wedBox.setText("Wednesday-misspelling guard");
+        wedBox.setText("Hear 'edhesday' as 'Wednesday'");
         wedBox.setChecked(EqPrefs.wednesdayGuard(this));
         wedBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
@@ -201,12 +201,12 @@ public class MainActivity extends Activity {
         });
         root.addView(wedBox);
         TextView rateLabel = new TextView(this);
-        rateLabel.setText("Engine sample rate");
+        rateLabel.setText("Sound quality");
         root.addView(rateLabel);
         Spinner rateSpinner = new Spinner(this);
         final int[] rates = {11025, 22050, 44100, 48000};
-        List<String> rateNames = new ArrayList<>();
-        for (int r : rates) rateNames.add(r + " Hz");
+        final String[] rateNames = {"Standard (11 kHz)", "Clear (22 kHz)",
+                "Clearer (44.1 kHz)", "Studio (48 kHz)"};
         rateSpinner.setAdapter(new ArrayAdapter<>(this,
                 android.R.layout.simple_spinner_dropdown_item, rateNames));
         int savedRate = EqPrefs.rateHz(this);
@@ -233,10 +233,8 @@ public class MainActivity extends Activity {
         });
         root.addView(rateSpinner);
 
-        ScrollView scroll = new ScrollView(this);
-        scroll.addView(status);
-        root.addView(scroll);
-        setContentView(root);
+        root.addView(status);
+        setContentView(page);
 
         Bundle ex = getIntent() != null ? getIntent().getExtras() : null;
         handleExtras(ex);
@@ -290,8 +288,8 @@ public class MainActivity extends Activity {
                 "Italian", "Polish", "Japanese"};
         List<String> out = new ArrayList<>();
         for (int i = 0; i < langIds.length; i++) {
-            String n = i < names.length ? names[i] : ("Language " + i);
-            out.add(n + " [0x" + Integer.toHexString(langIds[i]) + "]");
+            // Plain names only: engine ids stay in logs, not on screen.
+            out.add(i < names.length ? names[i] : ("Language " + (i + 1)));
         }
         if (out.isEmpty()) {
             out.add("(engine missing: no languages)");
@@ -372,8 +370,21 @@ public class MainActivity extends Activity {
         return h;
     }
 
+    /** A small caption above a control, wired for TalkBack via labelFor. */
+    private LinearLayout labeled(String caption, View control) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        TextView label = new TextView(this);
+        label.setText(caption);
+        if (control.getId() == View.NO_ID) control.setId(View.generateViewId());
+        label.setLabelFor(control.getId());
+        row.addView(label);
+        row.addView(control);
+        return row;
+    }
+
     private void updateSpeedLabel(int value) {
-        if (speedLabel != null) speedLabel.setText("Speed: " + value + " (50 is shipped default)");
+        if (speedLabel != null) speedLabel.setText(value + " (voices ship at 50)");
     }
 
     private void onDictAdd() {
