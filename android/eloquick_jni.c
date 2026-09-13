@@ -109,8 +109,9 @@ static ECIHand eq_create_for_language(int language_or_zero)
     unsigned int langs[32];
     int n = 32, k;
 
-    /* The bind: reading the registry is what binds it. */
-    if (eciGetAvailableLanguages(langs, &n) == 0 || n < 1)
+    /* The bind: reading the registry is what binds it. NOTE: nonzero is
+       failure here (XREF cli/evv.c: eo_getAvailableLanguages), not success. */
+    if (eciGetAvailableLanguages(langs, &n) != 0 || n < 1)
         return (ECIHand)0;
     if (language_or_zero == 0)
         return eciNewEx((int)langs[0]);
@@ -188,7 +189,8 @@ Java_com_eloquick_tts_EloQuickEngine_nativeGetLanguages(JNIEnv *env, jclass cls)
     jintArray out;
     (void)cls;
     eq_port_acquire();
-    if (eciGetAvailableLanguages(langs, &n) == 0 || n < 1) {
+    /* Nonzero is failure (see above). */
+    if (eciGetAvailableLanguages(langs, &n) != 0 || n < 1) {
         eq_port_release();
         return NULL;
     }
@@ -269,4 +271,58 @@ Java_com_eloquick_tts_EloQuickEngine_nativeGetParam(JNIEnv *env, jclass cls,
     if (!(ECIHand)(intptr_t)handle)
         return 0;
     return (jint)eciGetParam((ECIHand)(intptr_t)handle, (int)param);
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeCopyVoice
+ * Signature: (JII)I
+ *
+ * Copies preset voice `from` (1-8) into the speaking voice 0, like the
+ * CLI's -v option. Answers nonzero on success.
+ */
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeCopyVoice(JNIEnv *env, jclass cls,
+                                                     jlong handle, jint from, jint to)
+{
+    (void)env;
+    (void)cls;
+    if (!(ECIHand)(intptr_t)handle)
+        return 0;
+    return (jint)eciCopyVoice((ECIHand)(intptr_t)handle, (int)from, (int)to);
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeSetVoiceParam
+ * Signature: (JIII)I
+ */
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeSetVoiceParam(JNIEnv *env, jclass cls,
+                                                         jlong handle, jint voice,
+                                                         jint param, jint value)
+{
+    (void)env;
+    (void)cls;
+    if (!(ECIHand)(intptr_t)handle)
+        return 0;
+    return (jint)eciSetVoiceParam((ECIHand)(intptr_t)handle, (int)voice,
+                                  (int)param, (int)value);
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeGetVoiceParam
+ * Signature: (JII)I
+ */
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeGetVoiceParam(JNIEnv *env, jclass cls,
+                                                         jlong handle, jint voice,
+                                                         jint param)
+{
+    (void)env;
+    (void)cls;
+    if (!(ECIHand)(intptr_t)handle)
+        return 0;
+    return (jint)eciGetVoiceParam((ECIHand)(intptr_t)handle, (int)voice, (int)param);
 }

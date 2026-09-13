@@ -163,7 +163,18 @@ adb shell "/data/local/tmp/evv -L 0x<id-from-list> -o /data/local/tmp/de.wav 'Gu
 
 ---
 
-## On-device testing
+## Debug app (`android/app`)
+
+A no-Gradle demo + harness app (`com.eloquick.debug`, "EloQuick Debug"): language/voice spinners, text field, Speak via `AudioTrack`, plus an intent-driven self-test that logs `EQTEST` lines and a final `EQTEST RESULT ok=N fail=M` (all listed languages, bad-language refusal, voices 1–8). Build with the stock SDK tools:
+
+```bash
+py tools/build_android.py --abi arm64-v8a --debug  # native lib first
+py tools/build_debug_apk.py --abi arm64-v8a --install
+adb shell am start -n com.eloquick.debug/com.eloquick.debug.MainActivity --ez selftest true
+adb logcat -s EQTEST
+```
+
+Proven on Pixel 8: self-test 19/0 with and without audio playback, directed DE utterance plays through the speaker (playMs ≈ audio length), 600 monkey events with no crash/ANR.
 
 `tools/test_device.py` pushes the ABI build to `/data/local/tmp/eqtest` on the connected phone and runs the full gate: usage, `-L list` (expects all ten languages), `-l` voices, per-language synthesis with WAV validation (RIFF/WAVE, 11025 Hz mono 16-bit, non-silent), repeat-synth determinism (same length; bytes legitimately differ — engine voicing state), EN/DE separation, `evv` compat parity, and the unknown-`-L` error path.
 
