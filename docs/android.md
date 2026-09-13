@@ -190,6 +190,11 @@ adb logcat -s EQTEST
 
 The self-test covers: all listed languages, bad-language refusal, voices
 1–8, streaming drain, stop-mid-flight, dictionary teach/lookup/forget,
+dictionary *file* load (incl. UPPERCASE case-form match), Wednesday guard,
+heteronym on-vs-off rendering, and 22050/fallback sample rates.
+
+The self-test covers: all listed languages, bad-language refusal, voices
+1–8, streaming drain, stop-mid-flight, dictionary teach/lookup/forget,
 heteronym on-vs-off rendering, and 22050/fallback sample rates. The
 framework loop through the service gets its own mode:
 
@@ -197,7 +202,20 @@ framework loop through the service gets its own mode:
 adb shell am start -n com.eloquick.debug/com.eloquick.debug.MainActivity --ez fwtest true
 ```
 
-Proven on Pixel 8: self-test 24/0 with and without audio playback, directed DE utterance plays through the speaker (playMs ≈ audio length), framework client speaks through the binder service to onDone, 600 monkey events with no crash/ANR.
+Proven on Pixel 8: self-test 26/0 with and without audio playback, directed DE utterance plays through the speaker (playMs ≈ audio length), framework client speaks through the binder service to onDone, prefs-driven service session verified over adb (preset 4, hetero on, 44100 Hz), 600 monkey events with no crash/ANR.
+
+---
+
+## Settings, dictionary & tuning UI
+
+The debug app is a small real app, not just a harness. Sections:
+
+- **Speak**: language (10), voice preset (Reed…Grandpa), text, Speak.
+- **Voice tuning**: preset persists; speed slider (0–250) shapes voice 0; Preview.
+- **Pronunciation dictionary**: teach key/say pairs, tap to forget. Stored as key-TAB-say in device-protected storage, loaded per service instance; each key expanded to its case forms (the engine matches exact bytes). Files over 256 KB are refused rather than loaded (hundred-thousand-entry dictionaries hang the engine -- measured upstream of here).
+- **Reading**: heteronym-correction toggle (creation-time, off default), engine sample-rate choice, Wednesday-misspelling guard (on default).
+
+All settings live in device-protected `SharedPreferences`, so the directBootAware service reads them before first unlock; the service recreates its session whenever language, preset, speed, hetero, rate or dictionary revision changes. Intent automation (`text`/`lang`/`voice`, `selftest`, `fwtest`) is unchanged.
 
 `tools/test_device.py` pushes the ABI build to `/data/local/tmp/eqtest` on the connected phone and runs the full gate: usage, `-L list` (expects all ten languages), `-l` voices, per-language synthesis with WAV validation (RIFF/WAVE, 11025 Hz mono 16-bit, non-silent), repeat-synth determinism (same length; bytes legitimately differ — engine voicing state), EN/DE separation, `evv` compat parity, and the unknown-`-L` error path.
 

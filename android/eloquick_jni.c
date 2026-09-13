@@ -605,6 +605,40 @@ Java_com_eloquick_tts_EloQuickEngine_nativeDictForget(JNIEnv *env, jclass cls,
     e->dict = NULL_DICT_HAND;
 }
 
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeDictLoad
+ * Signature: (JILjava/lang/String;)I
+ *
+ * Hands a text file (key TAB say per line) to the engine's own volume
+ * loader. Answers eciDictNoError (0) on success. Large files are the
+ * caller's problem: community experience (eloquence-revived) is that
+ * hundred-thousand-entry root dictionaries hang the engine on-device,
+ * so the Java side caps what it will hand over.
+ */
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeDictLoad(JNIEnv *env, jclass cls,
+                                                    jlong handle, jint volume,
+                                                    jstring path)
+{
+    ECIHand h = (ECIHand)(intptr_t)handle;
+    eq_extra *e;
+    const char *name;
+    int answer;
+    (void)cls;
+    if (!h || !path)
+        return 6; /* eciDictAccessError */
+    e = eq_extra_get(h);
+    if (!e || !eq_dict_ensure(h, e))
+        return 6;
+    name = (*env)->GetStringUTFChars(env, path, NULL);
+    if (!name)
+        return 2; /* eciDictOutOfMemory */
+    answer = eciLoadDict(h, e->dict, (int)volume, name);
+    (*env)->ReleaseStringUTFChars(env, path, name);
+    return (jint)answer;
+}
+
 /* Heteronym filter: creation-time property, not a live toggle.
  *
  * hetero_install (src/eci/hetero/eci_hetero.c, via eci_old.c instance setup)
@@ -1116,4 +1150,35 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamSetSampleRateHz(JNIEnv *env, jc
     if (eciSetParam(s->handle, 5 /* P_SAMPLE_RATE */, index) < 0)
         return 0;
     return (jint)eq_rate_hz[index];
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeStreamDictLoad
+ * Signature: (JILjava/lang/String;)I
+ *
+ * File-backed user dictionary for a stream's instance (see nativeDictLoad
+ * for the format and the size caution).
+ */
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamDictLoad(JNIEnv *env, jclass cls,
+                                                          jlong shandle, jint volume,
+                                                          jstring path)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    eq_extra *e;
+    const char *name;
+    int answer;
+    (void)cls;
+    if (!s || !path)
+        return 6;
+    e = eq_extra_get(s->handle);
+    if (!e || !eq_dict_ensure(s->handle, e))
+        return 6;
+    name = (*env)->GetStringUTFChars(env, path, NULL);
+    if (!name)
+        return 2;
+    answer = eciLoadDict(s->handle, e->dict, (int)volume, name);
+    (*env)->ReleaseStringUTFChars(env, path, name);
+    return (jint)answer;
 }

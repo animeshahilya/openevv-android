@@ -4,14 +4,20 @@ import android.app.Activity;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.CompoundButton;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ListView;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.Spinner;
 import android.widget.TextView;
 
+import com.eloquick.tts.Eci;
 import com.eloquick.tts.EloQuickEngine;
 
 import java.util.ArrayList;
@@ -44,6 +50,12 @@ public class MainActivity extends Activity {
     private Spinner voiceSpinner;
     private EditText textInput;
     private TextView status;
+    private SeekBar speedBar;
+    private TextView speedLabel;
+    private EditText dictKey;
+    private EditText dictSay;
+    private ArrayAdapter<String> dictAdapter;
+    private java.util.List<EqDictionary.Entry> dictEntries = new java.util.ArrayList<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -65,11 +77,22 @@ public class MainActivity extends Activity {
         langSpinner.setAdapter(new ArrayAdapter<>(this,
                 android.R.layout.simple_spinner_dropdown_item, langLabels()));
         List<String> voices = new ArrayList<>();
-        for (int v = 1; v <= 8; v++) {
-            voices.add("Voice " + v);
+        for (int v = 0; v < Eci.PRESET_NAMES.length; v++) {
+            voices.add((v + 1) + " " + Eci.PRESET_NAMES[v]);
         }
         voiceSpinner.setAdapter(new ArrayAdapter<>(this,
                 android.R.layout.simple_spinner_dropdown_item, voices));
+        voiceSpinner.setSelection(Math.max(0, Math.min(7, EqPrefs.preset(this))));
+        voiceSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
+                EqPrefs.setPreset(MainActivity.this, pos);
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> p) {
+            }
+        });
         textInput.setText("Hello from EloQuick on Android.");
         speak.setText("Speak");
         speak.setOnClickListener(new View.OnClickListener() {
@@ -85,6 +108,131 @@ public class MainActivity extends Activity {
         root.addView(voiceSpinner);
         root.addView(textInput);
         root.addView(speak);
+
+        // ---- Voice tuning: preset persists above; speed shapes voice 0 ----
+        root.addView(sectionHeader("Voice tuning"));
+        speedLabel = new TextView(this);
+        root.addView(speedLabel);
+        speedBar = new SeekBar(this);
+        speedBar.setMax(Eci.SPEED_MAX);
+        speedBar.setProgress(EqPrefs.speed(this));
+        updateSpeedLabel(EqPrefs.speed(this));
+        speedBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar bar, int value, boolean fromUser) {
+                updateSpeedLabel(value);
+                EqPrefs.setSpeed(MainActivity.this, value);
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar bar) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar bar) {
+            }
+        });
+        root.addView(speedBar);
+        Button preview = new Button(this);
+        preview.setText("Preview voice");
+        preview.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                onSpeakPressed();
+            }
+        });
+        root.addView(preview);
+
+        // ---- Dictionary: key TAB say entries, tap one to delete ----
+        root.addView(sectionHeader("Pronunciation dictionary"));
+        dictKey = new EditText(this);
+        dictKey.setHint("word as written");
+        root.addView(dictKey);
+        dictSay = new EditText(this);
+        dictSay.setHint("say instead");
+        root.addView(dictSay);
+        Button dictAdd = new Button(this);
+        dictAdd.setText("Teach word");
+        dictAdd.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                onDictAdd();
+            }
+        });
+        root.addView(dictAdd);
+        ListView dictList = new ListView(this);
+        dictAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1,
+                new ArrayList<String>());
+        dictList.setAdapter(dictAdapter);
+        // Fixed height: a ListView inside a ScrollView would otherwise
+        // collapse to one row.
+        float density = getResources().getDisplayMetrics().density;
+        dictList.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, (int) (160 * density)));
+        dictList.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+            @Override
+            public void onItemClick(AdapterView<?> p, View v, int pos, long id) {
+                onDictDelete(pos);
+            }
+        });
+        root.addView(dictList);
+        refreshDictList();
+
+        // ---- Reading: hetero, quality, Wednesday guard ----
+        root.addView(sectionHeader("Reading"));
+        CheckBox heteroBox = new CheckBox(this);
+        heteroBox.setText("Heteronym correction (experimental)");
+        heteroBox.setChecked(EqPrefs.hetero(this));
+        heteroBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton b, boolean on) {
+                EqPrefs.setHetero(MainActivity.this, on);
+            }
+        });
+        root.addView(heteroBox);
+        CheckBox wedBox = new CheckBox(this);
+        wedBox.setText("Wednesday-misspelling guard");
+        wedBox.setChecked(EqPrefs.wednesdayGuard(this));
+        wedBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton b, boolean on) {
+                EqPrefs.setWednesdayGuard(MainActivity.this, on);
+            }
+        });
+        root.addView(wedBox);
+        TextView rateLabel = new TextView(this);
+        rateLabel.setText("Engine sample rate");
+        root.addView(rateLabel);
+        Spinner rateSpinner = new Spinner(this);
+        final int[] rates = {11025, 22050, 44100, 48000};
+        List<String> rateNames = new ArrayList<>();
+        for (int r : rates) rateNames.add(r + " Hz");
+        rateSpinner.setAdapter(new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_dropdown_item, rateNames));
+        int savedRate = EqPrefs.rateHz(this);
+        int ratePos = 1;
+        for (int i = 0; i < rates.length; i++) {
+            if (rates[i] == savedRate) ratePos = i;
+        }
+        rateSpinner.setSelection(ratePos);
+        rateSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            boolean first = true;
+
+            @Override
+            public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
+                if (first) {
+                    first = false;
+                    return;
+                }
+                EqPrefs.setRateHz(MainActivity.this, rates[pos]);
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> p) {
+            }
+        });
+        root.addView(rateSpinner);
+
         ScrollView scroll = new ScrollView(this);
         scroll.addView(status);
         root.addView(scroll);
@@ -213,6 +361,52 @@ public class MainActivity extends Activity {
 
     private void setStatus(String s) {
         status.setText(statusLine(s, langIds.length));
+    }
+
+    private TextView sectionHeader(String title) {
+        TextView h = new TextView(this);
+        h.setText(title);
+        h.setTextSize(18);
+        float density = getResources().getDisplayMetrics().density;
+        h.setPadding(0, (int) (12 * density), 0, (int) (4 * density));
+        return h;
+    }
+
+    private void updateSpeedLabel(int value) {
+        if (speedLabel != null) speedLabel.setText("Speed: " + value + " (50 is shipped default)");
+    }
+
+    private void onDictAdd() {
+        String key = dictKey.getText().toString().trim();
+        String say = dictSay.getText().toString().trim();
+        if (key.isEmpty() || say.isEmpty()) {
+            setStatus("dictionary: need both a word and what to say");
+            return;
+        }
+        dictEntries.add(new EqDictionary.Entry(key, say));
+        EqDictionary.write(this, dictEntries);
+        dictKey.setText("");
+        dictSay.setText("");
+        refreshDictList();
+        setStatus("dictionary: taught '" + key + "' (" + dictEntries.size() + " entries)");
+    }
+
+    private void onDictDelete(int pos) {
+        if (pos < 0 || pos >= dictEntries.size()) return;
+        EqDictionary.Entry removed = dictEntries.remove(pos);
+        EqDictionary.write(this, dictEntries);
+        refreshDictList();
+        setStatus("dictionary: forgot '" + removed.key + "'");
+    }
+
+    private void refreshDictList() {
+        dictEntries = EqDictionary.read(this);
+        if (dictAdapter == null) return;
+        dictAdapter.clear();
+        for (EqDictionary.Entry e : dictEntries) {
+            dictAdapter.add(e.key + "  ->  " + e.say);
+        }
+        dictAdapter.notifyDataSetChanged();
     }
 
     private void runSelfTest(final boolean play) {
@@ -374,6 +568,61 @@ public class MainActivity extends Activity {
                         fail++;
                     }
                     Log.i(TAG, "selftest dict status=" + (dictOk ? "OK" : "FAIL"));
+                }
+                // Dictionary file load: write two entries, load the file,
+                // look both up (one mid-sentence case), forget.
+                if (ids.length > 0) {
+                    boolean fileOk = false;
+                    long h = 0;
+                    try {
+                        java.util.List<EqDictionary.Entry> entries =
+                                new java.util.ArrayList<>();
+                        entries.add(new EqDictionary.Entry("eqfileone", "hello"));
+                        entries.add(new EqDictionary.Entry("EqFileTwo", "world"));
+                        EqDictionary.write(MainActivity.this, entries);
+                        h = EloQuickEngine.nativeCreate(ids[0]);
+                        if (h != 0) {
+                            int rc = EloQuickEngine.nativeDictLoad(h, 0,
+                                    EqDictionary.file(MainActivity.this)
+                                            .getAbsolutePath());
+                            String a = EloQuickEngine.nativeDictLookup(h, 0, "eqfileone");
+                            String b = EloQuickEngine.nativeDictLookup(h, 0, "EQFILETWO");
+                            fileOk = rc == 0 && "hello".equals(a) && "world".equals(b);
+                            Log.i(TAG, "selftest dictfile rc=" + rc + " a=" + a + " b=" + b);
+                            EloQuickEngine.nativeDictForget(h);
+                            EloQuickEngine.nativeDestroy(h);
+                            h = 0;
+                        }
+                        EqDictionary.write(MainActivity.this,
+                                new java.util.ArrayList<EqDictionary.Entry>());
+                    } catch (Throwable t) {
+                        Log.e(TAG, "selftest dictfile failed", t);
+                    } finally {
+                        if (h != 0) {
+                            try {
+                                EloQuickEngine.nativeDestroy(h);
+                            } catch (UnsatisfiedLinkError ignored) {
+                            }
+                        }
+                    }
+                    if (fileOk) {
+                        ok++;
+                    } else {
+                        fail++;
+                    }
+                    Log.i(TAG, "selftest dictfile status=" + (fileOk ? "OK" : "FAIL"));
+                }
+                // Wednesday guard: pure-text unit check.
+                {
+                    boolean wedOk = "I leave Wednesday.".equals(
+                            EqText.wednesdayGuard("I leave edhesday."))
+                            && "Hello.".equals(EqText.wednesdayGuard("Hello."));
+                    if (wedOk) {
+                        ok++;
+                    } else {
+                        fail++;
+                    }
+                    Log.i(TAG, "selftest wednesday status=" + (wedOk ? "OK" : "FAIL"));
                 }
                 // Heteronym filter: creation-time property. Default on for one
                 // instance, off for another; a heteronym-heavy line must

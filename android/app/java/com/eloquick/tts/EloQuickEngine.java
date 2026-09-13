@@ -35,6 +35,9 @@ public final class EloQuickEngine {
     public static native String nativeDictLookup(long handle, int volume, String key);
     /** Back to the language's own dictionary. */
     public static native void nativeDictForget(long handle);
+    /** Load a text dictionary file (key TAB say per line) into a volume.
+     *  Answers 0 (eciDictNoError) on success. */
+    public static native int nativeDictLoad(long handle, int volume, String path);
     /** Heteronym correction default for instances created afterwards
      *  (creation-time property: hetero_install runs at instance setup, so
      *  toggling wants a new instance). Off default: a loaded filter turns
@@ -52,4 +55,5 @@ public final class EloQuickEngine {
     public static native int nativeStreamSetVoiceParam(long stream, int voice, int param, int value);
     public static native int nativeStreamGetVoiceParam(long stream, int voice, int param);
     public static native int nativeStreamSetSampleRateHz(long stream, int hz);
+    public static native int nativeStreamDictLoad(long stream, int volume, String path);
 }

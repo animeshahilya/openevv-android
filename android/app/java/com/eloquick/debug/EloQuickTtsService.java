@@ -45,6 +45,10 @@ public class EloQuickTtsService extends TextToSpeechService {
     private long stream = 0;
     private int streamLang = 0;
     private int streamPreset = -1;
+    private int streamSpeed = -1;
+    private boolean streamHetero = false;
+    private int streamRateHz = 0;
+    private int streamDictRev = -1;
     private int baseSpeed = Eci.DEFAULT_SPEED;
     private int basePitch = 50;
     private int rateHz = DEFAULT_RATE_HZ;
@@ -107,7 +111,8 @@ public class EloQuickTtsService extends TextToSpeechService {
     protected int onLoadLanguage(String lang, String country, String variant) {
         int[] found = matchLanguage(lang, country);
         if (found == null) return TextToSpeech.LANG_NOT_SUPPORTED;
-        return ensureSession(found[0], 0) ? found[1] : TextToSpeech.LANG_NOT_SUPPORTED;
+        int preset = Math.max(0, Math.min(Eci.PRESET_NAMES.length - 1, EqPrefs.preset(this)));
+        return ensureSession(found[0], preset) ? found[1] : TextToSpeech.LANG_NOT_SUPPORTED;
     }
 
     @Override
@@ -174,7 +179,8 @@ public class EloQuickTtsService extends TextToSpeechService {
     public String onGetDefaultVoiceNameFor(String lang, String country, String variant) {
         int[] found = matchLanguage(lang, country);
         if (found == null) return null;
-        return voiceName(found[0], 0);
+        int preset = Math.max(0, Math.min(Eci.PRESET_NAMES.length - 1, EqPrefs.preset(this)));
+        return voiceName(found[0], preset);
     }
 
     // ---- session ----------------------------------------------------------
@@ -182,13 +188,14 @@ public class EloQuickTtsService extends TextToSpeechService {
     /** Voice preset applied the engine-safe way: presets are read-only, so a
      *  preset is copied to scratch voice 9, shaped there (speed normalised
      *  to DEFAULT_SPEED -- Glen/Sandy ship faster), and copied to voice 0. */
-    private boolean applyPresetLocked(long stream, int presetIndex) {
+    private boolean applyPresetLocked(long stream, int presetIndex, int speed) {
         int preset = Math.max(Eci.FIRST_PRESET,
                 Math.min(Eci.LAST_PRESET, presetIndex + Eci.FIRST_PRESET));
         if (EloQuickEngine.nativeStreamCopyVoice(stream, preset, Eci.SCRATCH_VOICE) == 0)
             return false;
+        int wantSpeed = Eci.clampVoice(Eci.VOICE_SPEED, speed);
         if (EloQuickEngine.nativeStreamSetVoiceParam(stream, Eci.SCRATCH_VOICE,
-                Eci.VOICE_SPEED, Eci.DEFAULT_SPEED) < 0) return false;
+                Eci.VOICE_SPEED, wantSpeed) < 0) return false;
         if (EloQuickEngine.nativeStreamCopyVoice(stream, Eci.SCRATCH_VOICE,
                 Eci.VOICE_CURRENT) == 0) return false;
         baseSpeed = EloQuickEngine.nativeStreamGetVoiceParam(stream, Eci.VOICE_CURRENT,
@@ -199,23 +206,50 @@ public class EloQuickTtsService extends TextToSpeechService {
     }
 
     private boolean ensureSession(int language, int preset) {
+        int speed = EqPrefs.speed(this);
+        boolean hetero = EqPrefs.hetero(this);
+        int wantHz = EqPrefs.rateHz(this);
+        int dictRev = EqPrefs.dictRev(this);
         synchronized (guard) {
-            if (stream != 0 && streamLang == language && streamPreset == preset) return true;
+            if (stream != 0 && streamLang == language && streamPreset == preset
+                    && streamSpeed == speed && streamHetero == hetero
+                    && streamRateHz == wantHz && streamDictRev == dictRev) return true;
             if (stream != 0) {
                 EloQuickEngine.nativeStreamDestroy(stream);
                 stream = 0;
             }
+            // Hetero is a creation-time property: hold the default across
+            // creation, then put it back for everyone else.
+            try {
+                EloQuickEngine.nativeSetHeteroDefault(hetero);
+            } catch (UnsatisfiedLinkError e) {
+                Log.e(TAG, "native lib missing", e);
+                return false;
+            }
             long s = EloQuickEngine.nativeStreamCreate(language);
+            try {
+                EloQuickEngine.nativeSetHeteroDefault(false);
+            } catch (UnsatisfiedLinkError ignored) {
+            }
             if (s == 0) return false;
-            int hz = EloQuickEngine.nativeStreamSetSampleRateHz(s, DEFAULT_RATE_HZ);
+            int hz = EloQuickEngine.nativeStreamSetSampleRateHz(s, wantHz);
             rateHz = hz > 0 ? hz : 11025;
-            if (!applyPresetLocked(s, preset)) {
+            if (!applyPresetLocked(s, preset, speed)) {
                 EloQuickEngine.nativeStreamDestroy(s);
                 return false;
             }
+            EloQuickEngine.nativeStreamDictLoad(s, 0,
+                    EqDictionary.file(this).getAbsolutePath());
             stream = s;
             streamLang = language;
             streamPreset = preset;
+            streamSpeed = speed;
+            streamHetero = hetero;
+            streamRateHz = wantHz;
+            streamDictRev = dictRev;
+            Log.i(TAG, "session lang=0x" + Integer.toHexString(language)
+                    + " preset=" + preset + " speed=" + speed + " hetero=" + hetero
+                    + " rateHz=" + rateHz + " dictRev=" + dictRev);
             return true;
         }
     }
@@ -255,7 +289,7 @@ public class EloQuickTtsService extends TextToSpeechService {
         // pin the old voice's shaping).
         int[] wanted = findVoice(request.getVoiceName());
         int language = wanted != null ? wanted[0] : found[0];
-        int preset = wanted != null ? wanted[1] : 0;
+        int preset = wanted != null ? wanted[1] : EqPrefs.preset(this);
         if (!ensureSession(language, preset)) {
             callback.error(TextToSpeech.ERROR_SERVICE);
             return;
@@ -268,11 +302,12 @@ public class EloQuickTtsService extends TextToSpeechService {
         }
         int speed = SpeechRate.speedForPercent(baseSpeed, request.getSpeechRate());
         int pitch = (int) Math.max(0, Math.min(100, (long) basePitch * request.getPitch() / 100));
+        String raw = request.getCharSequenceText() == null ? ""
+                : request.getCharSequenceText().toString();
+        if (EqPrefs.wednesdayGuard(this)) raw = EqText.wednesdayGuard(raw);
         String text = "`vs" + Eci.clampVoice(Eci.VOICE_SPEED, speed)
                 + " `vb" + Eci.clampVoice(Eci.VOICE_PITCH_BASELINE, pitch)
-                + " `pp0 "
-                + (request.getCharSequenceText() == null ? ""
-                        : request.getCharSequenceText().toString());
+                + " `pp0 " + raw;
         if (text.trim().isEmpty()) {
             callback.start(hz, AudioFormat.ENCODING_PCM_16BIT, 1);
             callback.done();
