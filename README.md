@@ -1,88 +1,64 @@
-# EloQuick (Android Port & Performance Toolchain)
+# EloQuick for Android
 
-> **EloQuick**: Ultra-fast reimplementation of IBM's Eloquence / Embedded ViaVoice text-to-speech engine tailored for Android and screen-reading performance. Features **-O3 DSP & formant vectorization**, **16KB page alignment** (Android 15+ compatible), multi-ABI support (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`), CMake integration for Android Studio/Gradle, and standalone CLI binaries for device shell and Termux.
+IBM Eloquence / Embedded ViaVoice TTS as portable C, built for Android. NDK + CMake, 16KB-page clean (Android 15+), `arm64-v8a` / `armeabi-v7a` / `x86_64` / `x86`. Upstream engine: [Mudb0y/openevv](https://github.com/Mudb0y/openevv).
 
-[![Android Build](https://github.com/animeshahilya/openevv-android/actions/workflows/android.yml/badge.svg)](https://github.com/animeshahilya/openevv-android/actions/workflows/android.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Android Build](https://github.com/animeshahilya/openevv-android/actions/workflows/android.yml/badge.svg)](https://github.com/animeshahilya/openevv-android/actions/workflows/android.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-*Upstream engine by [Mudb0y/openevv](https://github.com/Mudb0y/openevv).*
+Scope is Android only. Blessed paths are `tools/build_android.py`, `CMakeLists.txt`, and `android/`. The inherited desktop tree (`Makefile`, `win/`, `speechd/`, `nvda/`, `reference/`, desktop docs) stays for provenance and merges; it is not built, tested, or supported here.
 
-> **Scope: Android only.** The blessed paths in this fork are `tools/build_android.py` (NDK) and `CMakeLists.txt` (Gradle `externalNativeBuild` / `add_subdirectory`), targeting `arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`, plus the JNI bridge in `android/`. The inherited desktop scaffolding — root `Makefile`, `win/`, `speechd/`, `nvda/`, `reference/`, desktop docs — is kept for engine provenance and upstream merges, but it is **not built, tested, or supported here**. Android issues get fixed here; desktop issues belong upstream.
+## Build
 
----
-
-## Tailored for Android & Speed
-
-This repository packages and optimizes Eloquence / OpenEVV specifically for Android applications, screen-reader services (like TalkBack engines), and standalone on-device command-line environments:
-
-- **Ultra-Fast Formant Synthesis**: Klatt DSP resonators optimized with register caching, loop-invariant hoisting, branch prediction, and `-O3` auto-vectorization for instant, zero-latency speech.
-- **16KB Page Size Alignment**: Linked with `-Wl,-z,max-page-size=16384` to guarantee full compatibility with Android 15+ devices.
-- **Shared Libraries (`libeloquick.so` & `libopenevv.so`)**: Ready for direct dynamic linking or JNI bridging inside Android apps (`TextToSpeechService`). Both primary and legacy naming supported out-of-the-box, with a bundled `com.eloquick.tts.EloQuickEngine` JNI bridge (see `android/eloquick_jni.c` and `docs/android.md`).
-- **Standalone CLI Executable (`eloquick` & `evv`)**: Position-independent binary (`-pie`) that can be pushed via `adb` or run directly inside Termux. Multi-language aware via `-L list` / `-L <id>` (a build holds ten languages but speaks the first unless told which).
-- **All 10 Bundled Languages Pre-Linked**: Includes US English, British English, German, Castilian Spanish, Latin American Spanish, European French, Canadian French, Italian, Polish, and Japanese (with `rom/jajp` romanizer).
-- **Full CMake & Python NDK Build Toolchain**: Build with a single command or integrate via Gradle `externalNativeBuild`. The engine compiles once per ABI (object library); both `.so`s and the CLI link the same objects. Trim with `--langs` / `-DOPENEVV_LANGS` for smaller APKs.
-
-### Android Quickstart
-
-Build shared libraries and CLI for Android (`arm64-v8a`):
 ```bash
 python tools/build_android.py --abi arm64-v8a
-```
-
-Build for all 4 Android architectures (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`):
-```bash
 python tools/build_android.py --abi all
+python tools/build_android.py --langs enus,dede
 ```
 
-Output files are placed under `build/android/<abi>/`:
-- `libeloquick.so` (Primary shared library exposing standard `include/eci.h` API)
-- `libopenevv.so`  (Compatibility mirror for existing OpenEVV apps)
-- `eloquick`       (Primary standalone command-line synthesis tool)
-- `evv`            (Compatibility mirror)
+Per ABI, under `build/android/<abi>/`: `libeloquick.so`, `libopenevv.so`, `eloquick`, `evv`. The engine compiles once; both `.so` files and the CLI link the same objects. `evv` is a copy of `eloquick` (argv[0]-aware). Flags: `-O3 -ffp-contract=fast`, `-Wl,-z,max-page-size=16384`, ThinLTO where the toolchain accepts it.
 
-For detailed Android integration instructions, see [docs/android.md](docs/android.md).
+## Integrate
 
----
+```cmake
+add_subdirectory(path/to/openevv-android ${CMAKE_CURRENT_BINARY_DIR}/openevv)
+target_link_libraries(your_tts_jni_lib PRIVATE eloquick)
+```
 
-# openevv
+```kotlin
+init { System.loadLibrary("eloquick") }
+@JvmStatic external fun nativeCreate(language: Int): Long
+@JvmStatic external fun nativeSynth(handle: Long, text: String): ShortArray?
+```
 
-A portable Eloquence. IBM's Embedded ViaVoice text-to-speech engine, taken out of its 1999 Windows objects and rebuilt as C that compiles and speaks on a machine it was never meant to run on.
+Full bridge, service, ADB/Termux, and app docs: [docs/android.md](docs/android.md).
 
-It speaks, and it spoke IBM's own samples: the audio came out byte for byte identical to IBM's binary across every test case of every language, from both a thirty-two and a sixty-four bit build, and across all nine languages the SDK shipped. That is what the transcription was proved by; the engine is being changed on purpose now, so what is held to from here is a recorded answer for each of 979 cases rather than IBM's. Nothing is borrowed at build time. No DLL, no SDK, no Wine.
+## Contracts
 
-    make
-    ./build/evv -o hello.wav "Hello from Eloquence."
+- Load one `.so` per process: `eloquick`. `libopenevv.so` is a pure-ECI compat mirror with no JNI inside.
+- Resolve languages first: `nativeGetLanguages()` then `nativeCreate(id)`. `0` return means unknown; call `nativeDestroy` when done.
+- `nativeSynth` is bounded: 64KB text, ~2min PCM, 30s drain. Long or stoppable speech goes on `nativeStreamSpeak/Read/Stop`.
+- Encoding: input is UTF-8, validated at the boundary. `plpl` takes UTF-8, `jajp` takes romanized input, all others take Latin-1 bytes. Malformed input returns null/false.
 
-That wants a C compiler, Python, and about a quarter of an hour, most of it compiling the rules. `make RULES=bytecode` is the same engine in half a minute, saying the same samples; it runs the rules interpreted rather than compiled, which costs rather more than half the speed. On Linux this command writes a wave file rather than playing it; pipe it into a player to hear it at once:
+## Languages
 
-    ./build/evv "Hello from Eloquence." | aplay -q -
+Ten, pre-linked: `enus dede engb eses esus frca frfr itit plpl jajp` (`jajp` via `rom/jajp`). Trim with `--langs` / `-DOPENEVV_LANGS` to cut APK size. A build holds all listed languages but speaks the first unless selected (`-L list` / `-L <id>`, or the JNI language id).
 
-For desktop and screen-reader speech there is a native Speech Dispatcher output module: `make speechd` builds it, it hands its samples back to Speech Dispatcher rather than opening a device, and it offers every language in the build with its eight voices. `docs/speech-dispatcher.md` says how to install it, how to try it without installing it, and what it does not do.
+## Check on device
 
-On Windows there is a speak window. Take `evvspeak.exe` from the latest release, type something, pick one of the eight voices, and hear it; `evv.exe` beside it is the same engine on the command line. One file each, nothing to install, and `make win` builds both from here with mingw.
+```bash
+py tools/build_android.py --abi arm64-v8a --debug
+py tools/test_device.py --abi arm64-v8a
+py tools/build_debug_apk.py --abi arm64-v8a --install
+```
 
-The engine is a library as well as a command, under the names IBM published, so a program written against IBM's can load ours instead -- a screen reader add-on, for instance. `make so` builds `build/libeci.so` and `include/eci.h` is what to compile against; `make win` and `make win32` build `build/eci.dll` and `build/eci32.dll` from the same source. The Windows pair is in the release, in folders that say which bitness is which: an add-on that loads the engine into the reader's own process wants the reader's bitness, and the most used one hosts the engine in a thirty-two bit process of its own whatever the reader is. `docs/using.md` is how to get from a checkout to speech in your own program, `docs/api.md` the call-by-call reference, and `docs/quirks.md` what will trip you.
+`test_device.py` gates usage, language list, per-language WAV shape, determinism, EN/DE separation, and compat parity. Debug APK self-test logs `EQTEST RESULT ok=N fail=M`.
 
-It reads SSML. A document goes in and the annotations the engine already understands come out -- say-as for numbers, ordinals, dates, times, telephone numbers and currency, prosody for rate, pitch, range and volume, emphasis, voice selection by gender and age, pronunciations in IPA or in the engine's own alphabet, pauses, marks and language switching. It is IBM's own reader, transcribed, and it answers what IBM's answers over 176 documents. Turning it on takes three calls of the published interface and `test/lib/dll.c` is the shortest example of them.
+## Provenance
 
-`./build/evv -h` says what the options are, and `./build/evv -l` says what each of the eight voices is set to.
+Engine, tools, and docs are MIT in LICENSE, except `src/klatt_tables.c` and `src/eci_xmltok_tables.c` (IBM data) and all of `lang/` (transcribed IBM language data, not MIT-licensable). See NOTICE. No SDK, DLL, or Wine needed to build. Community fixes folded in from the same upstream family (`stormdragon2976`, `Eagalon`, `beyondsighttech`, `evvdroid`, `eloquence-revived`) are credited in `docs/android.md`.
 
-## What is here
+<details>
+<summary>Upstream desktop reference (not supported here)</summary>
 
-`src` is the engine: hand-written C, one file per object in IBM's own module decomposition, so that a file can be checked against the object it came from. It is in four groups -- `delta` for the machine that runs a language's rules, `klatt` for the formant synthesiser that makes the sound, `port` for what the port supplies itself, and `eci` for the published interface and the machinery behind it, which is most of it and has groups of its own.
+Desktop build, Speech Dispatcher module, Windows `eci.dll`/`evvspeak.exe`, SSML, and the 979-case `test/matrix.sh` gate live upstream and in the inherited tree. This fork does not run them; see `docs/building.md`, `docs/testing.md`, `docs/windows.md`, `docs/speech-dispatcher.md` for reference.
 
-`lang/enus` is US English: the rules, the constants they read, the sets, the link tables, the voice presets and the dictionary. This is the part lifted out of IBM's objects rather than written, and it is in the tree so that the engine builds without the SDK. The rules are text there, one file to an object in `lang/enus/rules`, and what the engine runs is written out of that text by every build. `lang/dede` is German, lifted the same way. A build takes as many languages as it is given -- `make LANGS="lang/enus lang/dede"` puts both in one binary and the caller picks between them. English is the one that is finished; German matches IBM over the cases there are for it. `docs/status.md` says in which configurations.
-
-`cli/evv.c` is the command above and `win/speak.c` is the speak window. `cli/probe.c` is the same engine behind a front that reports what it answered at every step, which is what `test` sets against IBM's binary case for case. `lib` is the engine under the names IBM published and `include/eci.h` is what a program compiles against. `tools` is grouped by what a tool acts on: `rules` for the whole rules toolchain, `module` for everything else in a language, `engine` for what acts on `src`, `rom` for the Japanese romanizer, `sdk` for unpacking IBM's libraries, and `measure` for the three that answer a question about the sound in numbers. `reference` builds IBM's own binary under Wine, which is what the tests compare against.
-
-## Documentation
-
-`docs/using.md` is how to use the engine in your own program, `docs/api.md` the published interface call by call, and `docs/quirks.md` the things that cost an afternoon if nobody says them first; those three are for someone building against this rather than on it. `docs/building.md` is what you need, what to build, and what every variable does. `docs/rules.md` is the rules, in all three forms, and how a rule of ours is written and proved. `docs/language.md` is everything else in a language module, and what it takes to add one. `docs/testing.md` is what proves any of it. `docs/windows.md` is the Windows side, the library and the screen reader add-on. `docs/speech-dispatcher.md` is the Linux one: the Speech Dispatcher output module, how to install it and what it does not do. `docs/tree.md` says what every directory is for, and `docs/status.md` what works, what does not, and what has not been started. `docs/notes` is the finished results, one to a file, which are the answers rather than the state: Polish, SSML, the crashing strings, the sample rates, a language module as text, the comparison against Apple's Eloquence, and the way towards an engine with no virtual machine in it.
-
-## Licence and provenance
-
-Our own work -- the engine, the two front ends, the tools, the tests and the documents -- is under the MIT licence in LICENSE. Two files in `src` are the exception and are data rather than code: `klatt_tables.c` is the synthesiser's own tables and `eci_xmltok_tables.c` is the eight tables the XML scanner is, both lifted out of IBM's objects by tools in `tools`, and both IBM's on the terms below.
-
-The language data under `lang` is not ours. It is transcribed out of IBM's Embedded ViaVoice objects, byte for byte where the engine's arithmetic depends on it, and it is IBM's work. The MIT licence does not cover it and we are in no position to license it to anyone. NOTICE says what it is, whose it is, and who the rights in it may belong to today.
-
-Nothing else of IBM's is here. The objects the port was read out of, and the headers and symbol tables it was read with, are not in the tree and are not needed to build. IBM still serves the SDK they came out of from its own public download host, and `docs/building.md` says where it is and what to do with it -- which is what anyone wanting to check this work against the original would start from.
+</details>

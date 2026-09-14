@@ -57,6 +57,43 @@ void evvRunStaticInitialisers(void);
 
 #define EQ_FRAME 2048
 
+/* Service hardening limits. Whole-utterance nativeSynth holds the full PCM
+ * in RAM before returning: cap both ends so a TalkBack paragraph cannot
+ * ANR (300 s spin) or OOM the service. Long text belongs on the streaming
+ * path (nativeStreamSpeak/Read), which pages through a 128 KB ring and is
+ * stoppable mid-flight. */
+#define EQ_MAX_TEXT_BYTES (64 * 1024)
+#define EQ_MAX_PCM_SAMPLES (11025 * 60 * 2)
+
+/* Encoding contract (lesson pulled from stormdragon2976/openevv
+ * speech-dispatcher-module: Polish UTF-8 vs Latin-1 byte walks collide at
+ * 0xC0-0xDF/0xA1-0xBF, so "above 0x7F in UTF-8 a byte is not a character to
+ * judge"). Engine expectation per language today:
+ *  - plpl: UTF-8 natively (engine converts itself);
+ *  - jajp: romanizer path, not raw kana/kanji bytes;
+ *  - all others: single-byte Latin-1-ish. Java callers pass UTF-8; non-ASCII
+ *    Latin-1 text must be converted before eciAddText (see EqText.java and
+ *    docs/android.md). This helper at least rejects malformed UTF-8 early
+ *    rather than feeding truncation artifacts to the engine. */
+static int eq_utf8_valid(const char *s, size_t n)
+{
+    size_t i = 0;
+    while (i < n) {
+        unsigned char c = (unsigned char)s[i];
+        size_t need;
+        if (c < 0x80) { i++; continue; }
+        else if ((c & 0xE0) == 0xC0) need = 1;
+        else if ((c & 0xF0) == 0xE0) need = 2;
+        else if ((c & 0xF8) == 0xF0) need = 3;
+        else return 0;
+        if (i + need >= n) return 0;
+        for (size_t k = 1; k <= need; k++)
+            if (((unsigned char)s[i + k] & 0xC0) != 0x80) return 0;
+        i += need + 1;
+    }
+    return 1;
+}
+
 typedef struct {
     short *pcm;
     size_t len;
@@ -148,9 +185,13 @@ static int eq_speak_to_session(ECIHand h, eq_session *s, const char *text)
         return 0;
     if (!eciSynthesize(h))
         return 0;
-    /* Pumping the queue is what drains it (XREF cli/evv.c). */
-    for (spins = 0; spins < 30000 && eciSpeaking(h); spins++)
+    /* Pumping the queue is what drains it (XREF cli/evv.c). Bounded: a TalkBack
+     * paragraph that never drains must fail fast, not hold a binder thread
+     * for 300 s. Streaming is the unbounded path. */
+    for (spins = 0; spins < 3000 && eciSpeaking(h); spins++)
         usleep(10 * 1000);
+    if (eciSpeaking(h))
+        return 0;
     eciSynchronize(h);
     return 1;
 }
@@ -239,17 +280,27 @@ Java_com_eloquick_tts_EloQuickEngine_nativeSynth(JNIEnv *env, jclass cls,
     const char *utf8 = NULL;
     eq_session s;
     jshortArray out = NULL;
+    size_t nbytes;
     (void)cls;
     if (!h || !text)
         return NULL;
     utf8 = (*env)->GetStringUTFChars(env, text, NULL);
     if (!utf8)
         return NULL;
+    /* Fail fast on oversize/malformed input: service callers must chunk long
+     * text onto the streaming path (see EQ_MAX_* above). */
+    nbytes = strlen(utf8);
+    if (nbytes == 0 || nbytes > EQ_MAX_TEXT_BYTES ||
+        !eq_utf8_valid(utf8, nbytes)) {
+        (*env)->ReleaseStringUTFChars(env, text, utf8);
+        return NULL;
+    }
     memset(&s, 0, sizeof(s));
     if (eq_speak_to_session(h, &s, utf8) && s.len > 0) {
-        out = (*env)->NewShortArray(env, (jsize)s.len);
+        size_t capped = s.len > EQ_MAX_PCM_SAMPLES ? EQ_MAX_PCM_SAMPLES : s.len;
+        out = (*env)->NewShortArray(env, (jsize)capped);
         if (out)
-            (*env)->SetShortArrayRegion(env, out, 0, (jsize)s.len, (const jshort *)s.pcm);
+            (*env)->SetShortArrayRegion(env, out, 0, (jsize)capped, (const jshort *)s.pcm);
     }
     free(s.pcm);
     (*env)->ReleaseStringUTFChars(env, text, utf8);
@@ -408,6 +459,7 @@ Java_com_eloquick_tts_EloQuickEngine_nativeVersion(JNIEnv *env, jclass cls)
 typedef struct eq_extra {
     ECIHand handle;
     ECIDictHand dict;
+    int refs; /* guarded by eq_extra_lock; entry freed when refs==0 after unlink */
     struct eq_extra *next;
 } eq_extra;
 
@@ -425,6 +477,7 @@ static eq_extra *eq_extra_find_locked(ECIHand h)
     return NULL;
 }
 
+/* Acquire a reference: safe to use after unlock until eq_extra_release. */
 static eq_extra *eq_extra_get(ECIHand h)
 {
     eq_extra *e;
@@ -434,19 +487,50 @@ static eq_extra *eq_extra_get(ECIHand h)
         e = (eq_extra *)calloc(1, sizeof(*e));
         if (e) {
             e->handle = h;
+            e->refs = 1;
             e->next = eq_extras;
             eq_extras = e;
         }
+    } else {
+        e->refs++;
     }
     pthread_mutex_unlock(&eq_extra_lock);
     return e;
 }
 
-/* Drops the extras for h, releasing engine-side state. The lock must not be
-   held (engine calls made here). Answers 1 when something was dropped. */
+static void eq_extra_release(eq_extra *e)
+{
+    int free_now = 0;
+    pthread_mutex_lock(&eq_extra_lock);
+    if (--e->refs == 0) {
+        /* Only freed here if already unlinked (drop path); otherwise the
+         * list still owns it and refs cannot hit 0 while linked. */
+        free_now = 1;
+    }
+    pthread_mutex_unlock(&eq_extra_lock);
+    if (free_now)
+        free(e);
+}
+
+/* Snapshot the dict handle under lock; engine calls run on the copy after
+ * unlock, so concurrent destroy/forget cannot dangle the caller. */
+static ECIDictHand eq_extra_dict_snapshot(eq_extra *e)
+{
+    ECIDictHand d;
+    pthread_mutex_lock(&eq_extra_lock);
+    d = e->dict;
+    pthread_mutex_unlock(&eq_extra_lock);
+    return d;
+}
+
+/* Drops the extras for h, releasing engine-side state. Unlinks under lock,
+ * then makes engine calls on local copies with no lock held. Answers 1 when
+ * something was dropped. Refcounted so a concurrent teach/lookup holding a
+ * reference cannot see a freed entry. */
 static int eq_extra_drop(ECIHand h)
 {
     eq_extra *e, *prev = NULL;
+    ECIDictHand dict = NULL_DICT_HAND;
     int dropped = 0;
     pthread_mutex_lock(&eq_extra_lock);
     e = eq_extras;
@@ -456,36 +540,58 @@ static int eq_extra_drop(ECIHand h)
                 prev->next = e->next;
             else
                 eq_extras = e->next;
+            dict = e->dict;
+            e->dict = NULL_DICT_HAND;
+            /* List ownership released; the entry lives until holders release. */
+            e->refs--;
+            if (e->refs == 0) {
+                pthread_mutex_unlock(&eq_extra_lock);
+                free(e);
+            } else {
+                pthread_mutex_unlock(&eq_extra_lock);
+            }
             dropped = 1;
             break;
         }
         prev = e;
         e = e->next;
     }
-    pthread_mutex_unlock(&eq_extra_lock);
+    if (!dropped)
+        pthread_mutex_unlock(&eq_extra_lock);
     if (!dropped)
         return 0;
-    if (e->dict) {
+    if (dict) {
         eciSetDict(h, NULL_DICT_HAND);
-        eciDeleteDict(h, e->dict);
+        eciDeleteDict(h, dict);
     }
-    free(e);
     return 1;
 }
 
 static int eq_dict_ensure(ECIHand h, eq_extra *e)
 {
-    if (e->dict)
+    ECIDictHand existing = eq_extra_dict_snapshot(e);
+    ECIDictHand fresh;
+    if (existing)
         return 1;
-    e->dict = eciNewDict(h);
-    if (!e->dict)
+    fresh = eciNewDict(h);
+    if (!fresh)
         return 0;
     /* An error code, so nought is success. */
-    if (eciSetDict(h, e->dict) != 0) {
-        eciDeleteDict(h, e->dict);
-        e->dict = NULL_DICT_HAND;
+    if (eciSetDict(h, fresh) != 0) {
+        eciDeleteDict(h, fresh);
         return 0;
     }
+    /* Publish under lock; another thread may have won the race. */
+    pthread_mutex_lock(&eq_extra_lock);
+    if (e->dict) {
+        ECIDictHand winner = e->dict;
+        pthread_mutex_unlock(&eq_extra_lock);
+        eciSetDict(h, winner);
+        eciDeleteDict(h, fresh);
+        return 1;
+    }
+    e->dict = fresh;
+    pthread_mutex_unlock(&eq_extra_lock);
     return 1;
 }
 
@@ -506,6 +612,7 @@ Java_com_eloquick_tts_EloQuickEngine_nativeDictTeach(JNIEnv *env, jclass cls,
 {
     ECIHand h = (ECIHand)(intptr_t)handle;
     eq_extra *e;
+    ECIDictHand dict;
     const char *k, *s;
     char *pair;
     size_t kn, sn;
@@ -514,7 +621,14 @@ Java_com_eloquick_tts_EloQuickEngine_nativeDictTeach(JNIEnv *env, jclass cls,
     if (!h || !key || !say)
         return -1;
     e = eq_extra_get(h);
-    if (!e || !eq_dict_ensure(h, e))
+    if (!e || !eq_dict_ensure(h, e)) {
+        if (e)
+            eq_extra_release(e);
+        return -1;
+    }
+    dict = eq_extra_dict_snapshot(e);
+    eq_extra_release(e);
+    if (!dict)
         return -1;
     k = (*env)->GetStringUTFChars(env, key, NULL);
     s = (*env)->GetStringUTFChars(env, say, NULL);
@@ -535,7 +649,7 @@ Java_com_eloquick_tts_EloQuickEngine_nativeDictTeach(JNIEnv *env, jclass cls,
     }
     memcpy(pair, k, kn + 1);
     memcpy(pair + kn + 1, s, sn + 1);
-    answer = eciUpdateDict(h, e->dict, (int)volume, pair, pair + kn + 1);
+    answer = eciUpdateDict(h, dict, (int)volume, pair, pair + kn + 1);
     free(pair);
     (*env)->ReleaseStringUTFChars(env, key, k);
     (*env)->ReleaseStringUTFChars(env, say, s);
@@ -557,21 +671,24 @@ Java_com_eloquick_tts_EloQuickEngine_nativeDictLookup(JNIEnv *env, jclass cls,
 {
     ECIHand h = (ECIHand)(intptr_t)handle;
     eq_extra *e;
+    ECIDictHand dict;
     const char *k;
     const char *found;
     jstring answer;
     (void)cls;
     if (!h || !key)
         return NULL;
-    pthread_mutex_lock(&eq_extra_lock);
-    e = eq_extra_find_locked(h);
-    pthread_mutex_unlock(&eq_extra_lock);
-    if (!e || !e->dict)
+    e = eq_extra_get(h);
+    if (!e)
+        return NULL;
+    dict = eq_extra_dict_snapshot(e);
+    eq_extra_release(e);
+    if (!dict)
         return NULL;
     k = (*env)->GetStringUTFChars(env, key, NULL);
     if (!k)
         return NULL;
-    found = eciDictLookup(h, e->dict, (int)volume, k);
+    found = eciDictLookup(h, dict, (int)volume, k);
     answer = found ? (*env)->NewStringUTF(env, found) : NULL;
     (*env)->ReleaseStringUTFChars(env, key, k);
     return answer;
@@ -591,18 +708,25 @@ Java_com_eloquick_tts_EloQuickEngine_nativeDictForget(JNIEnv *env, jclass cls,
 {
     ECIHand h = (ECIHand)(intptr_t)handle;
     eq_extra *e;
+    ECIDictHand dict;
     (void)env;
     (void)cls;
     if (!h)
         return;
+    e = eq_extra_get(h);
+    if (!e)
+        return;
+    /* Detach atomically under lock; engine calls run after unlock on the
+     * local copy so a concurrent lookup cannot observe a half-cleared set. */
     pthread_mutex_lock(&eq_extra_lock);
-    e = eq_extra_find_locked(h);
+    dict = e->dict;
+    e->dict = NULL_DICT_HAND;
     pthread_mutex_unlock(&eq_extra_lock);
-    if (!e || !e->dict)
+    eq_extra_release(e);
+    if (!dict)
         return;
     eciSetDict(h, NULL_DICT_HAND);
-    eciDeleteDict(h, e->dict);
-    e->dict = NULL_DICT_HAND;
+    eciDeleteDict(h, dict);
 }
 
 /*
@@ -623,18 +747,27 @@ Java_com_eloquick_tts_EloQuickEngine_nativeDictLoad(JNIEnv *env, jclass cls,
 {
     ECIHand h = (ECIHand)(intptr_t)handle;
     eq_extra *e;
+    ECIDictHand dict;
     const char *name;
     int answer;
     (void)cls;
     if (!h || !path)
         return 6; /* eciDictAccessError */
     e = eq_extra_get(h);
-    if (!e || !eq_dict_ensure(h, e))
+    if (!e)
+        return 6;
+    if (!eq_dict_ensure(h, e)) {
+        eq_extra_release(e);
+        return 6;
+    }
+    dict = eq_extra_dict_snapshot(e);
+    eq_extra_release(e);
+    if (!dict)
         return 6;
     name = (*env)->GetStringUTFChars(env, path, NULL);
     if (!name)
         return 2; /* eciDictOutOfMemory */
-    answer = eciLoadDict(h, e->dict, (int)volume, name);
+    answer = eciLoadDict(h, dict, (int)volume, name);
     (*env)->ReleaseStringUTFChars(env, path, name);
     return (jint)answer;
 }
@@ -933,6 +1066,13 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamSpeak(JNIEnv *env, jclass cls,
     if (!utf8)
         return JNI_FALSE;
     n = strlen(utf8);
+    /* Same input contract as nativeSynth, minus the length cap rationale:
+     * streaming pages through the ring, but a single multi-MB utterance still
+     * pins the text + engine queue; chunk in Java instead. */
+    if (n == 0 || n > EQ_MAX_TEXT_BYTES || !eq_utf8_valid(utf8, n)) {
+        (*env)->ReleaseStringUTFChars(env, text, utf8);
+        return JNI_FALSE;
+    }
     buf = (unsigned char *)malloc(n + 1);
     if (!buf) {
         (*env)->ReleaseStringUTFChars(env, text, utf8);
@@ -1167,18 +1307,27 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamDictLoad(JNIEnv *env, jclass cl
 {
     eq_stream *s = (eq_stream *)(intptr_t)shandle;
     eq_extra *e;
+    ECIDictHand dict;
     const char *name;
     int answer;
     (void)cls;
     if (!s || !path)
         return 6;
     e = eq_extra_get(s->handle);
-    if (!e || !eq_dict_ensure(s->handle, e))
+    if (!e)
+        return 6;
+    if (!eq_dict_ensure(s->handle, e)) {
+        eq_extra_release(e);
+        return 6;
+    }
+    dict = eq_extra_dict_snapshot(e);
+    eq_extra_release(e);
+    if (!dict)
         return 6;
     name = (*env)->GetStringUTFChars(env, path, NULL);
     if (!name)
         return 2;
-    answer = eciLoadDict(s->handle, e->dict, (int)volume, name);
+    answer = eciLoadDict(s->handle, dict, (int)volume, name);
     (*env)->ReleaseStringUTFChars(env, path, name);
     return (jint)answer;
 }

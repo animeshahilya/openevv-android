@@ -23,6 +23,10 @@ option(OPENEVV_ENABLE_JNI "Build JNI bridge (android/eloquick_jni.c) into shared
 # fast-math FP contraction for DSP. -O3 already auto-vectorizes and unrolls
 # where profitable, so no explicit -fvectorize/-funroll-loops (unknown to
 # some NDK Clangs, and pure noise under -w).
+#
+# NOTE: -w applies to the legacy engine objects ONLY (see
+# target_compile_options on eloquick_objs below). The JNI bridge and CLI
+# compile with -Wall -Wextra so new Android code never hides warnings.
 add_compile_options(
     -O3
     -fomit-frame-pointer
@@ -35,7 +39,6 @@ add_compile_options(
     -fno-trapping-math
     -ffp-contract=fast
     -fPIC
-    -w
     # The engine predates prototypes in places (missing headers and K&R-era
     # cross-file calls); NDK r28+ Clang errors on those by default. Upstream
     # builds with the same suppression.
@@ -81,8 +84,11 @@ set(OPENEVV_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-# Collect core engine C sources (POSIX port; Win32 port excluded)
-file(GLOB_RECURSE OPENEVV_SRC_FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
+# Collect core engine C sources (POSIX port; Win32 port excluded).
+# CONFIGURE_DEPENDS so new src/*.c files are picked up without a manual
+# re-configure (lesson from beyondsighttech/openevv stale-object segfault:
+# the build must never silently miss a file).
+file(GLOB_RECURSE OPENEVV_SRC_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
 list(FILTER OPENEVV_SRC_FILES EXCLUDE REGEX ".*/port_win32\\.c$")
 
 # Collect language sources
@@ -93,7 +99,7 @@ foreach(LANG ${OPENEVV_LANGS})
         message(FATAL_ERROR "Language directory missing: ${LANG_DIR}")
     endif()
     list(APPEND OPENEVV_INCLUDE_DIRS "${LANG_DIR}")
-    file(GLOB LANG_SOURCES "${LANG_DIR}/*.c")
+    file(GLOB LANG_SOURCES CONFIGURE_DEPENDS "${LANG_DIR}/*.c")
     list(FILTER LANG_SOURCES EXCLUDE REGEX ".*/delta_rules_c.*\\.c$")
     list(APPEND OPENEVV_LANG_FILES ${LANG_SOURCES})
 endforeach()
@@ -104,7 +110,7 @@ endforeach()
 set(OPENEVV_ROM_FILES "")
 set(OPENEVV_ROM_DEFS "")
 if("jajp" IN_LIST OPENEVV_LANGS)
-    file(GLOB OPENEVV_ROM_FILES "${CMAKE_CURRENT_SOURCE_DIR}/rom/jajp/*.c")
+    file(GLOB OPENEVV_ROM_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/rom/jajp/*.c")
     list(APPEND OPENEVV_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/rom/jajp")
     set(OPENEVV_ROM_DEFS -DEVV_ROM_JAJP)
 endif()
@@ -154,11 +160,23 @@ add_library(eloquick_objs OBJECT
     ${OPENEVV_ROM_FILES}
 )
 target_include_directories(eloquick_objs PUBLIC ${OPENEVV_INCLUDE_DIRS})
+# Legacy engine sources predate -Wall cleanliness: silence warnings there
+# only, so new code (JNI/CLI) still surfaces them.
+target_compile_options(eloquick_objs PRIVATE -w)
 if(OPENEVV_ROM_DEFS)
     target_compile_definitions(eloquick_objs PUBLIC ${OPENEVV_ROM_DEFS})
 endif()
 
-# 1. Primary shared library (libeloquick.so)
+# JNI bridge compiles warning-clean: it is new code, not transcribed engine.
+if(OPENEVV_JNI_FILES)
+    set_source_files_properties(${OPENEVV_JNI_FILES} PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Wno-unused-parameter")
+endif()
+
+# 1. Primary shared library (libeloquick.so): the ONLY library carrying the
+# JNI bridge. Load exactly one .so per process -- loading both libeloquick.so
+# and libopenevv.so duplicates the native method implementations (both used
+# to embed eloquick_jni.c) and wastes a full engine copy in RAM.
+# Java side: System.loadLibrary("eloquick"). See docs/android.md.
 add_library(eloquick SHARED
     $<TARGET_OBJECTS:eloquick_objs>
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/eci_api.c
@@ -171,11 +189,12 @@ endif()
 target_link_libraries(eloquick m pthread)
 set_target_properties(eloquick PROPERTIES OUTPUT_NAME "eloquick")
 
-# Compatibility shared library (libopenevv.so): same objects, own SONAME.
+# Compatibility shared library (libopenevv.so): same objects, own SONAME,
+# pure ECI API with NO JNI bridge (avoids duplicate native symbols when both
+# .so files sit in one APK; the app loads libeloquick.so for JNI).
 add_library(openevv SHARED
     $<TARGET_OBJECTS:eloquick_objs>
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/eci_api.c
-    ${OPENEVV_JNI_FILES}
 )
 target_include_directories(openevv PUBLIC ${OPENEVV_INCLUDE_DIRS})
 if(OPENEVV_ROM_DEFS)

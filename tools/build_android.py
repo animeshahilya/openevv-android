@@ -74,14 +74,12 @@ def find_ndk_root():
 
     home = os.path.expanduser("~")
     candidates = [
-        # Windows (current user + default install layouts)
-        r"C:\Users\alex\AppData\Local\Android\Sdk\ndk",
+        # Windows default SDK layout (user-agnostic: never hardcode a username)
         os.path.join(home, "AppData", "Local", "Android", "Sdk", "ndk"),
         # Linux
         os.path.join(home, "Android", "Sdk", "ndk"),
         "/opt/android-sdk/ndk",
         "/usr/local/lib/android/sdk/ndk",
-        os.path.join(home, "Library", "Android", "sdk", "ndk"),
         # macOS default
         os.path.join(home, "Library", "Android", "sdk", "ndk"),
     ]
@@ -181,6 +179,28 @@ def newest_header_mtime():
                     if mt > newest:
                         newest = mt
     return newest
+
+
+def compiler_accepts(clang, flag, target_flag=None):
+    """Probe whether Clang accepts a compile flag (e.g. -flto=thin)."""
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".c", delete=False,
+                                     mode="w", encoding="utf-8") as f:
+        f.write("int evv_probe(void){return 0;}\n")
+        src = f.name
+    obj = src + ".o"
+    try:
+        cmd = [clang, "-c", src, "-o", obj, flag] + (target_flag or [])
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        return res.returncode == 0
+    except OSError:
+        return False
+    finally:
+        for p in (src, obj):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
 
 
 def build_abi(abi, ndk_root, debug=False, langs=None, api_override=None,
@@ -289,13 +309,26 @@ def build_abi(abi, ndk_root, debug=False, langs=None, api_override=None,
         "-DDEBUG=1",
     ] if debug else [
         "-O3",
-        "-flto=thin",
+        # ThinLTO only when this exact Clang accepts it (older NDKs warn or
+        # fail; assuming it breaks hermetic builds). Probed below.
         "-fno-math-errno",
         "-fno-trapping-math",
         "-ffp-contract=fast",
         # No -g in release: -Wl,-s strips it at link time, so generating
         # debug info for ~200 files would be pure build time for nothing.
     ]
+
+    engine_quiet = [
+        "-w",
+        # The engine predates prototypes in places (missing headers and
+        # K&R-era cross-file calls); NDK r28+ Clang errors on those by
+        # default. Upstream builds with the same suppression.
+        "-Wno-implicit-function-declaration",
+        "-Werror=int-conversion",
+        "-Werror=incompatible-pointer-types",
+    ]
+    # New Android code (JNI bridge, CLI) stays warning-visible.
+    android_warn = ["-Wall", "-Wextra", "-Wno-unused-parameter"]
 
     common_cflags = [
         "-fomit-frame-pointer" if not debug else "-fno-omit-frame-pointer",
@@ -305,13 +338,6 @@ def build_abi(abi, ndk_root, debug=False, langs=None, api_override=None,
         "-fdata-sections",
         "-fvisibility=hidden",
         "-fPIC",
-        "-w",
-        # The engine predates prototypes in places (missing headers and
-        # K&R-era cross-file calls); NDK r28+ Clang errors on those by
-        # default. Upstream builds with the same suppression.
-        "-Wno-implicit-function-declaration",
-        "-Werror=int-conversion",
-        "-Werror=incompatible-pointer-types",
     ] + opt_cflags + rom_defs + cfg["cflags"] + inc_flags
 
     header_floor = newest_header_mtime()
@@ -321,9 +347,24 @@ def build_abi(abi, ndk_root, debug=False, langs=None, api_override=None,
     bare_clang = os.path.basename(clang).startswith("clang")
     target_flag = [f"--target={cfg['triple']}{api}"] if bare_clang else []
 
+    # Feature-probe ThinLTO instead of assuming it (older NDK Clangs warn or
+    # error; assuming it breaks hermetic builds). Same guard as CMakeLists.
+    use_thin_lto = False
+    if not debug and compiler_accepts(clang, "-flto=thin", target_flag):
+        use_thin_lto = True
+        common_cflags.append("-flto=thin")
+    lto_tag = " + ThinLTO" if use_thin_lto else " (no ThinLTO: toolchain refused -flto=thin)"
+
+    jni_set = {os.path.normcase(os.path.normpath(p)) for p in
+               (jni_files + [os.path.join(ROOT, "cli", "evv.c"),
+                             os.path.join(ROOT, "lib", "eci_api.c")])}
+
     def compile_source(src):
         rel = os.path.relpath(src, ROOT)
-        h = hashlib.md5(rel.encode("utf-8")).hexdigest()[:8]
+        # 16 hex chars of the full relative path (not 8 of basename): ~200
+        # sources share basenames across src/lang/rom, so short hashes risk
+        # collisions that silently reuse the wrong object.
+        h = hashlib.md5(rel.encode("utf-8")).hexdigest()[:16]
         base = os.path.splitext(os.path.basename(src))[0]
         obj = os.path.join(obj_dir, f"{base}_{h}.o")
 
@@ -337,7 +378,9 @@ def build_abi(abi, ndk_root, debug=False, langs=None, api_override=None,
         except OSError:
             pass
 
-        cmd = [clang, "-c", src, "-o", obj] + common_cflags + target_flag
+        extra = (android_warn if os.path.normcase(os.path.normpath(src)) in jni_set
+                 else engine_quiet)
+        cmd = [clang, "-c", src, "-o", obj] + common_cflags + extra + target_flag
         res = subprocess.run(cmd, capture_output=True, text=True)
         if res.returncode != 0:
             print(f"FAILED: {src}\n{res.stderr}", file=sys.stderr)
@@ -347,7 +390,7 @@ def build_abi(abi, ndk_root, debug=False, langs=None, api_override=None,
     # Compile once; link three times (two SONAMEs + one CLI). The old CMake
     # compiled every source 4x; this script never did -- keep it that way.
     core_sources = src_files + lang_files + rom_files
-    print(f"Compiling {len(core_sources)} core sources [{'DEBUG' if debug else '-O3 release + ThinLTO'}]...")
+    print(f"Compiling {len(core_sources)} core sources [{'DEBUG' if debug else '-O3 release'}{lto_tag if not debug else ''}]...")
     workers = jobs or os.cpu_count() or 8
     with ThreadPoolExecutor(max_workers=workers) as ex:
         core_objs = list(ex.map(compile_source, core_sources))
@@ -373,11 +416,39 @@ def build_abi(abi, ndk_root, debug=False, langs=None, api_override=None,
         "-Wl,-z,common-page-size=16384",
     ]
 
-    opt_link_flags = [] if debug else [
-        "-flto=thin",
-        "-Wl,-O3",
-        "-Wl,--icf=all",
-    ]
+    # Link-time opts mirror the compile probe: only pass what this linker
+    # accepts. -Wl,--icf=all is NDK-r26+; older linkers fail the whole link.
+    opt_link_flags = []
+    if not debug:
+        opt_link_flags += ["-Wl,-O3"]
+        if use_thin_lto:
+            opt_link_flags.append("-flto=thin")
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".o", delete=False) as tf:
+            probe_obj = tf.name
+        try:
+            probe_src = os.path.join(build_dir, "_link_probe.c")
+            with open(probe_src, "w", encoding="utf-8") as f:
+                f.write("int evv_link_probe(void){return 0;}\n")
+            if subprocess.run([clang, "-c", probe_src, "-o", probe_obj] +
+                              target_flag, capture_output=True).returncode == 0:
+                for flag in ("-Wl,--icf=all",):
+                    probe_so = os.path.join(build_dir, "_link_probe.so")
+                    test = subprocess.run(
+                        [clang, "-shared", probe_obj, "-o", probe_so] +
+                        target_flag + [flag], capture_output=True)
+                    try:
+                        os.unlink(probe_so)
+                    except OSError:
+                        pass
+                    if test.returncode == 0:
+                        opt_link_flags.append(flag)
+        finally:
+            for p in (probe_obj, os.path.join(build_dir, "_link_probe.c")):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
 
     out_eloquick = os.path.join(build_dir, "eloquick")
     out_evv = os.path.join(build_dir, "evv")

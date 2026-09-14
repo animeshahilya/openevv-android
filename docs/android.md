@@ -150,6 +150,35 @@ Notes:
 - Always resolve the language via `nativeGetLanguages()` first, then `nativeCreate(lang)`. Creating on a cold registry without binding is how sibling SAPI work ended up with every voice speaking US English; the bridge binds before creating, but callers should still pass a listed id rather than a guess.
 - `nativeCreate` returns 0 on failure (unknown language); check before use and `nativeDestroy` when done.
 - `nativeSynth` returns 11025 Hz mono PCM. Feed it to `AudioTrack` (`ENCODING_PCM_16BIT`, 11025 Hz, mono) for zero-file playback.
+- `nativeSynth` is capped (64 KB text, ~2 min PCM, 30 s drain timeout): chunk TalkBack paragraphs and prefer `nativeStreamSpeak/Read/Stop` for anything long or stoppable.
+- Load exactly one `.so` per process: `System.loadLibrary("eloquick")`. `libopenevv.so` is a pure-ECI compat mirror with no JNI inside (saves duplicate native symbols and RAM when both ship in one APK).
+
+### Text encoding contract
+
+Java strings arrive as UTF-8. The engine expects per-language bytes:
+
+- `plpl`: UTF-8 natively (the engine converts itself);
+- `jajp`: romanized input via `rom/jajp`, not raw kana/kanji;
+- all others: single-byte Latin-1. Convert non-ASCII text before `eciAddText` (see `EqText.java`); malformed UTF-8 is rejected with null/false.
+
+This is the Android form of the lesson `stormdragon2976/openevv` measured in its Speech Dispatcher module: above 0x7F a UTF-8 byte is not a character to judge (lead 0xC0-0xDF reads as Latin-1 capitals, continuation 0xA1-0xBF as symbols), so byte-wise walks must stand aside for UTF-8 text or Polish diacritics become question marks.
+
+### APK size: trim languages
+
+Every bundled language grows both `.so`s and the CLI. Trim with `--langs` / `-DOPENEVV_LANGS` and measure with `ls -l build/android/<abi>/`:
+
+- full ten-language `arm64-v8a` build: measure yours and record here;
+- `enus,dede` only: typically ~40-50% smaller (rules + dictionaries dominate).
+
+Record your app's table here before release; CI asserts 16 KB alignment per ABI but not a size budget (budgets are app-specific).
+
+### Community debts (same upstream family)
+
+- `Mudb0y/openevv` upstream: engine, CLI `-A`/`-R` lanes, crashers landings.
+- `stormdragon2976/openevv` (`speech-dispatcher-module`, `openevv-say`): Polish UTF-8 vs Latin-1 handling applied above; player fallback (`pw-play` to `paplay` to `aplay`, no exclusive ALSA grab) is the model for any Termux/on-device playback helper.
+- `Eagalon/openevv` (`sapi`): bind-before-create discipline and 8 to 10 language-slot fix, credited in `eloquick_jni.c` and `CMakeLists.txt`.
+- `beyondsighttech/openevv` (`upstream-engine`): header-aware rebuild (stale `.o` vs `delta_lang.h` segfault), mirrored in `build_android.py` and CMake `CONFIGURE_DEPENDS`.
+- `trypsynth/evvdroid`, `animeshahilya/eloquence-revived`: streaming ring/worker/abort protocol, ECI tables, creation-time heteronym model (settings UI, file-dict loads, SSML filter and unfinished Hindi/Amharic halves deliberately not taken).
 
 ---
 
@@ -188,15 +217,7 @@ adb shell am start -n com.eloquick.debug/com.eloquick.debug.MainActivity --ez se
 adb logcat -s EQTEST
 ```
 
-The self-test covers: all listed languages, bad-language refusal, voices
-1–8, streaming drain, stop-mid-flight, dictionary teach/lookup/forget,
-dictionary *file* load (incl. UPPERCASE case-form match), Wednesday guard,
-heteronym on-vs-off rendering, and 22050/fallback sample rates.
-
-The self-test covers: all listed languages, bad-language refusal, voices
-1–8, streaming drain, stop-mid-flight, dictionary teach/lookup/forget,
-heteronym on-vs-off rendering, and 22050/fallback sample rates. The
-framework loop through the service gets its own mode:
+The self-test covers: all listed languages, bad-language refusal, voices 1-8, streaming drain, stop-mid-flight, dictionary teach/lookup/forget, dictionary *file* load (incl. UPPERCASE case-form match), Wednesday guard, heteronym on-vs-off rendering, and 22050/fallback sample rates. The framework loop through the service gets its own mode:
 
 ```bash
 adb shell am start -n com.eloquick.debug/com.eloquick.debug.MainActivity --ez fwtest true

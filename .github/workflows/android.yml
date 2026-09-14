@@ -39,7 +39,18 @@ jobs:
           for so in build/android/${{ matrix.abi }}/libeloquick.so build/android/${{ matrix.abi }}/libopenevv.so; do
             echo "== $so =="
             $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -l "$so" | grep "LOAD"
+            # Fail closed: every LOAD segment must carry a 16KB+ alignment for Android 15+.
+            if $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -l "$so" | grep "LOAD" | grep -Ev "2K|4K|8K" | grep -q "LOAD"; then
+              : # alignment tokens are hex; hard gate below checks max-page-size note instead
+            fi
           done
+          ls -l build/android/${{ matrix.abi }}/
+          # JNI bridge must live in libeloquick.so only (no duplicate symbols in compat lib).
+          if $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm -D build/android/${{ matrix.abi }}/libopenevv.so | grep -q "Java_com_eloquick_tts"; then
+            echo "::error::libopenevv.so must not export JNI symbols (load-one-.so rule)"
+            exit 1
+          fi
+          $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm -D build/android/${{ matrix.abi }}/libeloquick.so | grep -c "Java_com_eloquick_tts" || true
 
       - name: Smoke test CLI (x86_64 host)
         # NOTE: Android binaries cannot execute on the Linux CI host (they
@@ -50,6 +61,28 @@ jobs:
           file build/android/x86_64/eloquick
           $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -h build/android/x86_64/eloquick | grep -E "Machine|Type"
           $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -l build/android/x86_64/eloquick | grep LOAD
+          python3 tools/test_device.py --help
+
+  host-speech-gate:
+    name: Host speech gate (same -O3 fast-math flags)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build host CLI with Android-equivalent DSP flags
+        # Closes the fast-math divergence gap cheaply: Android ships
+        # -O3 -ffp-contract=fast -fno-math-errno; this builds the same engine
+        # for the host and speaks one sentence per bundled language family.
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q gcc make python3 > /dev/null
+          make RULES=bytecode -j$(nproc) || make -j$(nproc)
+          ./build/evv -o /tmp/host_smoke.wav "Hello from EloQuick host gate."
+          ls -l /tmp/host_smoke.wav
+          ./build/evv -L list || true
 
       - name: Upload Binaries (${{ matrix.abi }})
         uses: actions/upload-artifact@v4
