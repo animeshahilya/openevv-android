@@ -17,6 +17,7 @@ import android.widget.SeekBar;
 import android.widget.Spinner;
 import android.widget.TextView;
 
+import com.eloquick.tts.AudioOptimizer;
 import com.eloquick.tts.Eci;
 import com.eloquick.tts.EloQuickEngine;
 
@@ -57,6 +58,13 @@ public class MainActivity extends Activity {
     private EditText dictSay;
     private ArrayAdapter<String> dictAdapter;
     private java.util.List<EqDictionary.Entry> dictEntries = new java.util.ArrayList<>();
+    private EditText rulePattern;
+    private EditText ruleSay;
+    private CheckBox ruleWhole;
+    private CheckBox ruleCase;
+    private CheckBox ruleRegex;
+    private ArrayAdapter<String> rulesAdapter;
+    private java.util.List<EqUserRules.Rule> ruleEntries = new java.util.ArrayList<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -188,6 +196,67 @@ public class MainActivity extends Activity {
         root.addView(dictList);
         refreshDictList();
 
+        // ---- My words: regex-capable rules applied before the engine ----
+        root.addView(sectionHeader("My words"));
+        TextView rulesHelp = new TextView(this);
+        rulesHelp.setText("Rewrite text before the engine hears it, then tap a rule below to forget it.");
+        root.addView(rulesHelp);
+        CheckBox rulesBox = new CheckBox(this);
+        rulesBox.setText("Apply my words");
+        rulesBox.setChecked(EqPrefs.userRules(this));
+        rulesBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton b, boolean on) {
+                EqPrefs.setUserRules(MainActivity.this, on);
+            }
+        });
+        root.addView(rulesBox);
+        rulePattern = new EditText(this);
+        rulePattern.setHint("text (tick regex below for patterns)");
+        root.addView(labeled("Find", rulePattern));
+        ruleSay = new EditText(this);
+        ruleSay.setHint("say instead");
+        root.addView(labeled("Say instead", ruleSay));
+        ruleWhole = new CheckBox(this);
+        ruleWhole.setText("Whole word");
+        ruleWhole.setChecked(true);
+        root.addView(ruleWhole);
+        ruleCase = new CheckBox(this);
+        ruleCase.setText("Match case");
+        root.addView(ruleCase);
+        ruleRegex = new CheckBox(this);
+        ruleRegex.setText("Regular expression");
+        ruleRegex.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton b, boolean on) {
+                if (on) ruleWhole.setChecked(false);
+            }
+        });
+        root.addView(ruleRegex);
+        Button rulesAdd = new Button(this);
+        rulesAdd.setText("Add rule");
+        rulesAdd.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                onRulesAdd();
+            }
+        });
+        root.addView(rulesAdd);
+        ListView rulesList = new ListView(this);
+        rulesAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1,
+                new ArrayList<String>());
+        rulesList.setAdapter(rulesAdapter);
+        rulesList.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, (int) (160 * density)));
+        rulesList.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+            @Override
+            public void onItemClick(AdapterView<?> p, View v, int pos, long id) {
+                onRulesDelete(pos);
+            }
+        });
+        root.addView(rulesList);
+        refreshRulesList();
+
         // ---- Reading: how it reads ----
         root.addView(sectionHeader("Reading"));
         CheckBox heteroBox = new CheckBox(this);
@@ -210,6 +279,156 @@ public class MainActivity extends Activity {
             }
         });
         root.addView(wedBox);
+        CheckBox optBox = new CheckBox(this);
+        optBox.setText("Polish the sound (presence + warmth, experimental)");
+        optBox.setChecked(EqPrefs.optimizer(this));
+        optBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton b, boolean on) {
+                EqPrefs.setOptimizer(MainActivity.this, on);
+            }
+        });
+        root.addView(optBox);
+        final String[] optProfiles = {"gentle", "balanced", "full"};
+        Spinner optProfile = new Spinner(this);
+        optProfile.setAdapter(new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_dropdown_item, optProfiles));
+        root.addView(labeled("Polish strength",
+                spinPick(optProfile, indexOf(optProfiles, EqPrefs.optimizerProfile(this)),
+                        new SpinChoice() {
+                            @Override
+                            public void picked(int pos) {
+                                EqPrefs.setOptimizerProfile(MainActivity.this, optProfiles[pos]);
+                            }
+                        })));
+        CheckBox normBox = new CheckBox(this);
+        normBox.setText("Read styled text as words (fancy fonts to plain)");
+        normBox.setChecked(EqPrefs.unicodeNorm(this));
+        normBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton b, boolean on) {
+                EqPrefs.setUnicodeNorm(MainActivity.this, on);
+            }
+        });
+        root.addView(normBox);
+        final String[] emojiModes = {"announce", "ignore"};
+        final String[] emojiValues = {EqPrefs.EMOJI_ANNOUNCE, EqPrefs.EMOJI_IGNORE};
+        Spinner emojiSpinner = new Spinner(this);
+        emojiSpinner.setAdapter(new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_dropdown_item, emojiModes));
+        root.addView(labeled("Emoji",
+                spinPick(emojiSpinner, indexOf(emojiValues, EqPrefs.emojiMode(this)),
+                        new SpinChoice() {
+                            @Override
+                            public void picked(int pos) {
+                                EqPrefs.setEmojiMode(MainActivity.this, emojiValues[pos]);
+                            }
+                        })));
+        final String[] digitNames = {"off", "single", "double", "triple"};
+        final String[] digitValues = {EqPrefs.DIGIT_OFF, EqPrefs.DIGIT_SINGLE,
+                EqPrefs.DIGIT_DOUBLE, EqPrefs.DIGIT_TRIPLE};
+        Spinner digitSpinner = new Spinner(this);
+        digitSpinner.setAdapter(new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_dropdown_item, digitNames));
+        root.addView(labeled("Long numbers",
+                spinPick(digitSpinner, indexOf(digitValues, EqPrefs.digitGrouping(this)),
+                        new SpinChoice() {
+                            @Override
+                            public void picked(int pos) {
+                                EqPrefs.setDigitGrouping(MainActivity.this, digitValues[pos]);
+                            }
+                        })));
+        CheckBox currBox = new CheckBox(this);
+        currBox.setText("Say '$5' as '5 dollars'");
+        currBox.setChecked(EqPrefs.currency(this));
+        currBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton b, boolean on) {
+                EqPrefs.setCurrency(MainActivity.this, on);
+            }
+        });
+        root.addView(currBox);
+        CheckBox timeBox = new CheckBox(this);
+        timeBox.setText("Say '3:30' and '2026-09-16' as words");
+        timeBox.setChecked(EqPrefs.timeDate(this));
+        timeBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton b, boolean on) {
+                EqPrefs.setTimeDate(MainActivity.this, on);
+            }
+        });
+        root.addView(timeBox);
+        final String[] modeNames = {"normal", "spelling", "phonetic (NATO)", "code"};
+        final String[] modeValues = {EqPrefs.READING_NORMAL, EqPrefs.READING_SPELLING,
+                EqPrefs.READING_PHONETIC, EqPrefs.READING_CODE};
+        Spinner modeSpinner = new Spinner(this);
+        modeSpinner.setAdapter(new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_dropdown_item, modeNames));
+        root.addView(labeled("Reading mode",
+                spinPick(modeSpinner, indexOf(modeValues, EqPrefs.readingMode(this)),
+                        new SpinChoice() {
+                            @Override
+                            public void picked(int pos) {
+                                EqPrefs.setReadingMode(MainActivity.this, modeValues[pos]);
+                            }
+                        })));
+        CheckBox progBox = new CheckBox(this);
+        progBox.setText("Say every { } [ ] symbol (code reading)");
+        progBox.setChecked(EqPrefs.progSymbols(this));
+        progBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton b, boolean on) {
+                EqPrefs.setProgSymbols(MainActivity.this, on);
+            }
+        });
+        root.addView(progBox);
+        final String[] punctNames = {"none", "some", "most", "all", "custom"};
+        final String[] punctValues = {EqPrefs.PUNCT_NONE, EqPrefs.PUNCT_SOME,
+                EqPrefs.PUNCT_MOST, EqPrefs.PUNCT_ALL, EqPrefs.PUNCT_CUSTOM};
+        Spinner punctSpinner = new Spinner(this);
+        punctSpinner.setAdapter(new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_dropdown_item, punctNames));
+        root.addView(labeled("Speak punctuation",
+                spinPick(punctSpinner, indexOf(punctValues, EqPrefs.punctPreset(this)),
+                        new SpinChoice() {
+                            @Override
+                            public void picked(int pos) {
+                                EqPrefs.setPunctPreset(MainActivity.this, punctValues[pos]);
+                            }
+                        })));
+        final EditText punctEdit = new EditText(this);
+        punctEdit.setHint("custom punctuation characters");
+        punctEdit.setText(EqPrefs.punctCustom(this));
+        punctEdit.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override
+            public void onFocusChange(View v, boolean hasFocus) {
+                if (!hasFocus) {
+                    EqPrefs.setPunctCustom(MainActivity.this,
+                            punctEdit.getText().toString());
+                }
+            }
+        });
+        root.addView(labeled("Custom characters", punctEdit));
+        CheckBox forceRateBox = new CheckBox(this);
+        forceRateBox.setText("Lock speed against caller apps");
+        forceRateBox.setChecked(EqPrefs.forceRate(this));
+        forceRateBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton b, boolean on) {
+                EqPrefs.setForceRate(MainActivity.this, on);
+            }
+        });
+        root.addView(forceRateBox);
+        CheckBox forcePitchBox = new CheckBox(this);
+        forcePitchBox.setText("Lock pitch against caller apps");
+        forcePitchBox.setChecked(EqPrefs.forcePitch(this));
+        forcePitchBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton b, boolean on) {
+                EqPrefs.setForcePitch(MainActivity.this, on);
+            }
+        });
+        root.addView(forcePitchBox);
         TextView rateLabel = new TextView(this);
         rateLabel.setText("Sound quality");
         root.addView(rateLabel);
@@ -487,6 +706,149 @@ public class MainActivity extends Activity {
             dictAdapter.add(e.key + "  ->  " + e.say);
         }
         dictAdapter.notifyDataSetChanged();
+    }
+
+    /** Spinner choice callback, without the initial-layout firing. */
+    private interface SpinChoice {
+        void picked(int pos);
+    }
+
+    private static int indexOf(String[] options, String value) {
+        for (int i = 0; i < options.length; i++) {
+            if (options[i].equals(value)) return i;
+        }
+        return 0;
+    }
+
+    /** Attaches a choice listener that skips the layout-time firing. */
+    private static Spinner spinPick(Spinner spinner, int selected, final SpinChoice onPick) {
+        spinner.setSelection(selected);
+        spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            boolean first = true;
+
+            @Override
+            public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
+                if (first) {
+                    first = false;
+                    return;
+                }
+                onPick.picked(pos);
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> p) {
+            }
+        });
+        return spinner;
+    }
+
+    private void onRulesAdd() {
+        String pattern = rulePattern.getText().toString();
+        String say = ruleSay.getText().toString();
+        if (pattern.isEmpty()) {
+            setStatus("my words: need text to find");
+            return;
+        }
+        ruleEntries.add(new EqUserRules.Rule(pattern, say, ruleCase.isChecked(),
+                ruleRegex.isChecked(), ruleWhole.isChecked(), ""));
+        EqUserRules.write(this, ruleEntries);
+        rulePattern.setText("");
+        ruleSay.setText("");
+        refreshRulesList();
+        setStatus("my words: added '" + pattern + "' (" + ruleEntries.size() + " rules)");
+    }
+
+    private void onRulesDelete(int pos) {
+        if (pos < 0 || pos >= ruleEntries.size()) return;
+        EqUserRules.Rule removed = ruleEntries.remove(pos);
+        EqUserRules.write(this, ruleEntries);
+        refreshRulesList();
+        setStatus("my words: forgot '" + removed.pattern + "'");
+    }
+
+    private void refreshRulesList() {
+        ruleEntries = EqUserRules.read(this);
+        if (rulesAdapter == null) return;
+        rulesAdapter.clear();
+        for (EqUserRules.Rule r : ruleEntries) {
+            String flags = (r.isRegex ? "re" : "tx") + (r.wholeWord ? ",w" : "")
+                    + (r.caseSensitive ? ",c" : "");
+            rulesAdapter.add(r.pattern + "  ->  " + r.replacement + "  [" + flags + "]");
+        }
+        rulesAdapter.notifyDataSetChanged();
+    }
+
+    /** One named pure-Java pipeline check; always logs, never throws. */
+    private boolean checkText(String name, boolean cond) {
+        Log.i(TAG, "selftest text " + name + " status=" + (cond ? "OK" : "FAIL"));
+        return cond;
+    }
+
+    /** Deterministic checks for the pre/post-synthesis helpers: no audio,
+     *  no device state, safe to run anywhere the self-test runs. */
+    private boolean selftestTextPipeline() {
+        boolean pass = true;
+        pass &= checkText("normalize",
+                EqText.normalize("Ｈｅｌｌｏ").equals("Hello"));
+        pass &= checkText("digits-single",
+                EqText.groupDigits("call 12345678 now", 1, 7).equals("call 1 2 3 4 5 6 7 8 now"));
+        pass &= checkText("digits-triple",
+                EqText.groupDigits("1234567890", 3, 7).equals("1 234 567 890"));
+        pass &= checkText("digits-short",
+                EqText.groupDigits("call 123 now", 1, 7).equals("call 123 now"));
+        pass &= checkText("currency",
+                EqText.expandCurrency("it costs $5.00").equals("it costs 5.00 dollars"));
+        pass &= checkText("time",
+                EqText.expandTimeDate("at 3:30").equals("at 3 30"));
+        pass &= checkText("time-oclock",
+                EqText.expandTimeDate("at 3:00").equals("at 3 o'clock"));
+        pass &= checkText("date",
+                EqText.expandTimeDate("on 2026-09-16").equals("on 16 September 2026"));
+        pass &= checkText("spelling",
+                EqText.expandSpelling("ab").equals("a b"));
+        pass &= checkText("phonetic",
+                EqText.expandPhonetic("ab").equals("Alpha Bravo"));
+        pass &= checkText("symbols",
+                EqText.expandProgrammingSymbols("a+b").equals("a plus b"));
+        pass &= checkText("punct",
+                EqText.expandPunctuation("hi!", "!").equals("hi exclamation"));
+        pass &= checkText("emoji-ignore",
+                EqText.filterEmojis("hi 😀!").equals("hi !"));
+        pass &= checkText("emoji-announce",
+                EqText.clarifyEmojis("hi 😀!").equals("hi  emoji !"));
+        pass &= checkText("surrogates",
+                EqText.stripUnpairedSurrogates("a\uD83Db").equals("ab"));
+        pass &= checkText("controls",
+                EqText.sanitizeControls("a\u0001b").equals("ab"));
+        pass &= checkText("wednesday",
+                EqText.wednesdayGuard("see you edhesday").equals("see you Wednesday"));
+        EqUserRules.Rule scoped = new EqUserRules.Rule(
+                "colour", "color", false, false, true, "eng");
+        pass &= checkText("rule-scope",
+                scoped.appliesTo("eng-usa") && !scoped.appliesTo("deu-deu"));
+        pass &= checkText("rule-apply",
+                scoped.apply("the colour").equals("the color"));
+        EqUserRules.Rule unscoped = new EqUserRules.Rule(
+                "x", "y", false, false, true, "");
+        pass &= checkText("rule-unscoped", unscoped.appliesTo("jpn-jpn"));
+        EqUserRules.Rule regex = new EqUserRules.Rule("a+", "b", false, true, false, "");
+        pass &= checkText("rule-regex", regex.apply("aa a").equals("b b"));
+        try {
+            AudioOptimizer opt = new AudioOptimizer(22050,
+                    AudioOptimizer.Profile.BALANCED);
+            byte[] pcm = new byte[2048];
+            for (int i = 0; i < pcm.length; i += 2) {
+                pcm[i] = (byte) (i & 0xFF);
+                pcm[i + 1] = 0;
+            }
+            opt.process(pcm, pcm.length);
+            pass &= checkText("optimizer", true);
+        } catch (Throwable t) {
+            Log.e(TAG, "selftest optimizer threw", t);
+            pass = false;
+            checkText("optimizer", false);
+        }
+        return pass;
     }
 
     private void runSelfTest(final boolean play) {
@@ -833,6 +1195,14 @@ public class MainActivity extends Activity {
                     }
                     Log.i(TAG, "selftest rate status=" + (rateOk ? "OK" : "FAIL"));
                 }
+                // Text pipeline: pure-Java transforms, deterministic.
+                boolean textOk = selftestTextPipeline();
+                if (textOk) {
+                    ok++;
+                } else {
+                    fail++;
+                }
+                Log.i(TAG, "selftest text status=" + (textOk ? "OK" : "FAIL"));
                 final int fok = ok;
                 final int ffail = fail;
                 Log.i(TAG, "RESULT ok=" + fok + " fail=" + ffail);

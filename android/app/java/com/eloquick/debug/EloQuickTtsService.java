@@ -8,6 +8,7 @@ import android.speech.tts.TextToSpeechService;
 import android.speech.tts.Voice;
 import android.util.Log;
 
+import com.eloquick.tts.AudioOptimizer;
 import com.eloquick.tts.Eci;
 import com.eloquick.tts.EloQuickEngine;
 import com.eloquick.tts.SpeechRate;
@@ -267,6 +268,68 @@ public class EloQuickTtsService extends TextToSpeechService {
 
     // ---- speaking ----------------------------------------------------------
 
+    /** "eng-usa" style tag for language-scoped user rules. */
+    private static String languageTag(int language) {
+        String[] loc = Eci.localeOf(language);
+        if (loc == null) return "";
+        return (loc[0] + "-" + loc[1]).toLowerCase(java.util.Locale.ROOT);
+    }
+
+    /** Pre-synthesis text pipeline: user rules, reading modes, number and
+     *  symbol expansion, normalization, emoji, punctuation. Each step is
+     *  behind its own EqPrefs toggle; the engine never sees SSML here
+     *  (it takes backtick annotations, not markup). */
+    private String preprocess(String raw, int language) {
+        String text = raw;
+        String mode = EqPrefs.readingMode(this);
+        boolean spelling = EqPrefs.READING_SPELLING.equals(mode);
+        boolean phonetic = EqPrefs.READING_PHONETIC.equals(mode);
+        boolean code = EqPrefs.READING_CODE.equals(mode);
+
+        if (EqPrefs.userRules(this)) {
+            text = EqUserRules.apply(this, text, languageTag(language));
+        }
+        // Single-character utterance: TalkBack/NVDA character navigation.
+        // NATO phonetics is the useful expansion here (spelling "a" is "a").
+        if (text.trim().length() == 1 && phonetic) {
+            text = EqText.expandPhonetic(text);
+        }
+        if (code || EqPrefs.progSymbols(this)) {
+            text = EqText.expandProgrammingSymbols(text);
+        }
+        if (EqPrefs.currency(this)) text = EqText.expandCurrency(text);
+        if (EqPrefs.timeDate(this)) text = EqText.expandTimeDate(text);
+        String grouping = EqPrefs.digitGrouping(this);
+        if (!EqPrefs.DIGIT_OFF.equals(grouping)) {
+            int size = EqPrefs.DIGIT_DOUBLE.equals(grouping) ? 2
+                    : EqPrefs.DIGIT_TRIPLE.equals(grouping) ? 3 : 1;
+            text = EqText.groupDigits(text, size, EqPrefs.digitThreshold(this));
+        }
+        if (spelling) {
+            text = EqText.expandSpelling(text);
+        } else if (phonetic) {
+            text = EqText.expandPhonetic(text);
+        }
+        if (EqPrefs.unicodeNorm(this)) text = EqText.normalize(text);
+        // Watchdog: always strip broken surrogates and hang-inducing
+        // controls, even with every other option off.
+        text = EqText.stripUnpairedSurrogates(text);
+        text = EqText.sanitizeControls(text);
+        if (EqText.containsEmoji(text)) {
+            text = EqPrefs.EMOJI_IGNORE.equals(EqPrefs.emojiMode(this))
+                    ? EqText.filterEmojis(text) : EqText.clarifyEmojis(text);
+        }
+        String punct = EqPrefs.punctChars(this);
+        if (!punct.isEmpty()) text = EqText.expandPunctuation(text, punct);
+        return text;
+    }
+
+    private static AudioOptimizer.Profile optimizerProfile(String name) {
+        if ("gentle".equals(name)) return AudioOptimizer.Profile.GENTLE;
+        if ("full".equals(name)) return AudioOptimizer.Profile.FULL;
+        return AudioOptimizer.Profile.BALANCED;
+    }
+
     @Override
     protected void onStop() {
         stopped = true;
@@ -300,11 +363,14 @@ public class EloQuickTtsService extends TextToSpeechService {
             s = stream;
             hz = rateHz;
         }
-        int speed = SpeechRate.speedForPercent(baseSpeed, request.getSpeechRate());
-        int pitch = (int) Math.max(0, Math.min(100, (long) basePitch * request.getPitch() / 100));
+        int speed = SpeechRate.speedForPercent(baseSpeed,
+                EqPrefs.forceRate(this) ? 100 : request.getSpeechRate());
+        int pitchPct = EqPrefs.forcePitch(this) ? 100 : request.getPitch();
+        int pitch = (int) Math.max(0, Math.min(100, (long) basePitch * pitchPct / 100));
         String raw = request.getCharSequenceText() == null ? ""
                 : request.getCharSequenceText().toString();
         if (EqPrefs.wednesdayGuard(this)) raw = EqText.wednesdayGuard(raw);
+        raw = preprocess(raw, language);
         if (raw.trim().isEmpty()) {
             callback.start(hz, AudioFormat.ENCODING_PCM_16BIT, 1);
             callback.done();
@@ -319,11 +385,17 @@ public class EloQuickTtsService extends TextToSpeechService {
         }
         Opening opening = new Opening(callback, hz);
         Pace pace = new Pace((long) hz * 2);
+        // Post-synthesis tone shaping: one stateful instance per utterance,
+        // never shared (filter/limiter state must not leak across requests).
+        AudioOptimizer optimizer = EqPrefs.optimizer(this)
+                ? new AudioOptimizer(hz, optimizerProfile(EqPrefs.optimizerProfile(this)))
+                : null;
         int size = Math.max(MIN_CHUNK, Math.min(MAX_CHUNK, callback.getMaxBufferSize()));
         byte[] buffer = new byte[size];
         while (!stopped) {
             int n = EloQuickEngine.nativeStreamRead(s, buffer, size);
             if (n <= 0) break;
+            if (optimizer != null) optimizer.process(buffer, n);
             if (!opening.open()) {
                 EloQuickEngine.nativeStreamStop(s);
                 return;
