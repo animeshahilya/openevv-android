@@ -307,18 +307,29 @@ public final class EqText {
     private static final char[] CURRENCY_SYMBOLS = {'$', 0x20AC, 0x00A3, 0x00A5, 0x20B9};
     private static final String[] CURRENCY_WORDS = {"dollars", "euros", "pounds", "yen", "rupees"};
 
+    // Pre-compiled patterns for each currency symbol: [prefix pattern, suffix pattern]
+    private static final Pattern[] CURRENCY_PREFIX_PATTERNS;
+    private static final Pattern[] CURRENCY_SUFFIX_PATTERNS;
+
+    static {
+        CURRENCY_PREFIX_PATTERNS = new Pattern[CURRENCY_SYMBOLS.length];
+        CURRENCY_SUFFIX_PATTERNS = new Pattern[CURRENCY_SYMBOLS.length];
+        for (int i = 0; i < CURRENCY_SYMBOLS.length; i++) {
+            String sym = Pattern.quote(String.valueOf(CURRENCY_SYMBOLS[i]));
+            CURRENCY_PREFIX_PATTERNS[i] = Pattern.compile(sym + "\\s*(\\d[\\d.,]*)");
+            CURRENCY_SUFFIX_PATTERNS[i] = Pattern.compile("(\\d[\\d.,]*)\\s*" + sym);
+        }
+    }
+
     /** "$5" -> "5 dollars" (English names). Lone symbols without digits
      *  are left for flattenWestern's fallback below. */
     public static String expandCurrency(String text) {
         if (text == null || text.isEmpty()) return text == null ? "" : text;
         String out = text;
         for (int s = 0; s < CURRENCY_SYMBOLS.length; s++) {
-            char sym = CURRENCY_SYMBOLS[s];
             String word = CURRENCY_WORDS[s];
-            out = out.replaceAll(Pattern.quote(String.valueOf(sym)) + "\\s*(\\d[\\d.,]*)",
-                    "$1 " + word);
-            out = out.replaceAll("(\\d[\\d.,]*)\\s*" + Pattern.quote(String.valueOf(sym)),
-                    "$1 " + word);
+            out = CURRENCY_PREFIX_PATTERNS[s].matcher(out).replaceAll("$1 " + word);
+            out = CURRENCY_SUFFIX_PATTERNS[s].matcher(out).replaceAll("$1 " + word);
         }
         return out;
     }
@@ -341,8 +352,8 @@ public final class EqText {
             0x201C, 0x201D, 0x201E, 0x201F, 0x00AB, 0x00BB, 0x2039, 0x203A,
             0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2212,
             0x2026,
-            0x00A0, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005,
-            0x2006, 0x2007, 0x2008, 0x2009, 0x200A, 0x202F, 0x205F,
+            0x00A0, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2004,
+            0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A, 0x202F, 0x205F,
             0x2022, 0x00B7, 0x2027,
             0x00A9, 0x00AE, 0x2122,
             0x00B0, 0x00D7, 0x00F7, 0x00B1,
@@ -366,6 +377,20 @@ public final class EqText {
             " euros ", " pounds ", " yen ", " rupees ",
     };
 
+    // Lookup table for O(1) flattenWestern: maps codepoint -> FLAT_TO index,
+    // or -1 if no mapping. Covers all FLAT_FROM codepoints (max 0x2265).
+    private static final short[] FLAT_LOOKUP;
+
+    static {
+        FLAT_LOOKUP = new short[0x2266]; // covers up to 0x2265 (≈)
+        for (int i = 0; i < FLAT_LOOKUP.length; i++) {
+            FLAT_LOOKUP[i] = -1;
+        }
+        for (int i = 0; i < FLAT_FROM.length; i++) {
+            FLAT_LOOKUP[FLAT_FROM[i]] = (short) i;
+        }
+    }
+
     /** Typographic characters to their plain equivalents; everything else
      *  (including accented Latin-1 and Polish letters) passes through. */
     public static String flattenWestern(String text) {
@@ -375,16 +400,15 @@ public final class EqText {
             int cp = text.codePointAt(i);
             if (cp < 0x80) {
                 out.append((char) cp);
-            } else {
-                String word = null;
-                for (int k = 0; k < FLAT_FROM.length; k++) {
-                    if (FLAT_FROM[k] == cp) {
-                        word = FLAT_TO[k];
-                        break;
-                    }
+            } else if (cp < FLAT_LOOKUP.length) {
+                short idx = FLAT_LOOKUP[cp];
+                if (idx >= 0) {
+                    out.append(FLAT_TO[idx]);
+                } else {
+                    out.appendCodePoint(cp);
                 }
-                if (word != null) out.append(word);
-                else out.appendCodePoint(cp);
+            } else {
+                out.appendCodePoint(cp);
             }
             i += Character.charCount(cp);
         }
@@ -805,24 +829,38 @@ public final class EqText {
     /** Text with isolated punctuation bullets silenced. */
     public static String stripIsolatedPunctuation(String text) {
         if (text == null || text.isEmpty()) return text == null ? "" : text;
-        String[] tokens = text.split("\\s+");
         StringBuilder out = new StringBuilder(text.length());
-        for (String token : tokens) {
-            if (token.isEmpty() || !isPurePunctuation(token)) {
-                if (out.length() > 0) out.append(' ');
-                out.append(token);
+        int start = 0;
+        int len = text.length();
+        boolean firstToken = true;
+        while (start < len) {
+            // Skip leading whitespace
+            while (start < len && Character.isWhitespace(text.charAt(start))) {
+                start++;
             }
+            if (start >= len) break;
+            // Find end of token
+            int end = start;
+            while (end < len && !Character.isWhitespace(text.charAt(end))) {
+                end++;
+            }
+            // Check if token is pure punctuation
+            boolean pure = true;
+            for (int i = start; i < end; ) {
+                int cp = text.codePointAt(i);
+                if (Character.isLetterOrDigit(cp)) {
+                    pure = false;
+                    break;
+                }
+                i += Character.charCount(cp);
+            }
+            if (!pure) {
+                if (!firstToken) out.append(' ');
+                out.append(text, start, end);
+                firstToken = false;
+            }
+            start = end;
         }
         return out.toString();
-    }
-
-    private static boolean isPurePunctuation(String token) {
-        if (token.isEmpty()) return false;
-        for (int i = 0; i < token.length();) {
-            int cp = token.codePointAt(i);
-            if (Character.isLetterOrDigit(cp)) return false;
-            i += Character.charCount(cp);
-        }
-        return true;
     }
 }
