@@ -20,11 +20,24 @@ import java.util.regex.Pattern;
 public final class EqText {
     private EqText() {}
 
+    /** Returns empty string for null, original for empty, original otherwise. */
+    private static String requireText(String text) {
+        if (text == null) return "";
+        if (text.isEmpty()) return text;
+        return text;
+    }
+
+    /** Returns empty string for null/empty, original otherwise. */
+    private static String requireNonEmpty(String text) {
+        if (text == null || text.isEmpty()) return "";
+        return text;
+    }
+
     private static final Pattern WEDNESDAY =
             Pattern.compile("(?i)\\b(w?edhesday|w?enhesday|w?ennesday|w?edesday|edhesday|enhesday)\\b");
 
     public static String wednesdayGuard(String text) {
-        if (text == null) return "";
+        text = requireNonEmpty(text);
         if (!text.toLowerCase(java.util.Locale.US).contains("esday")) return text;
         return WEDNESDAY.matcher(text).replaceAll("Wednesday");
     }
@@ -32,7 +45,7 @@ public final class EqText {
     /** NFKC: stylized Unicode ("bold" social-media fonts, fullwidth) reads
      *  as words instead of codepoint-by-codepoint spelling. */
     public static String normalize(String text) {
-        if (text == null || text.isEmpty()) return text == null ? "" : text;
+        text = requireText(text);
         try {
             return java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFKC);
         } catch (Exception e) {
@@ -43,7 +56,7 @@ public final class EqText {
     /** Drop unpaired UTF-16 surrogates (e.g. a paste truncated mid-emoji)
      *  before the JNI/native layer, which expects well-formed text. */
     public static String stripUnpairedSurrogates(String text) {
-        if (text == null || text.isEmpty()) return text == null ? "" : text;
+        text = requireText(text);
         StringBuilder out = new StringBuilder(text.length());
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
@@ -60,11 +73,11 @@ public final class EqText {
         return out.toString();
     }
 
-    /** Zero-hang watchdog: strip controls and invisible bidi/zero-width
+/** Zero-hang watchdog: strip controls and invisible bidi/zero-width
      *  runs that can stall an engine, keeping tab/newline and the
      *  backtick the annotation language uses. */
     public static String sanitizeControls(String text) {
-        if (text == null || text.isEmpty()) return text == null ? "" : text;
+        text = requireText(text);
         StringBuilder out = new StringBuilder(text.length());
         for (int i = 0; i < text.length();) {
             int cp = text.codePointAt(i);
@@ -93,7 +106,7 @@ public final class EqText {
 
     /** Emoji-ignore: remove emoji, collapsing the gaps. */
     public static String filterEmojis(String text) {
-        if (text == null || text.isEmpty()) return text == null ? "" : text;
+        text = requireNonEmpty(text);
         StringBuilder out = new StringBuilder(text.length());
         for (int i = 0; i < text.length();) {
             int cp = text.codePointAt(i);
@@ -105,7 +118,7 @@ public final class EqText {
 
     /** Emoji-announce: name each emoji run so something is heard. */
     public static String clarifyEmojis(String text) {
-        if (text == null || text.isEmpty()) return text == null ? "" : text;
+        text = requireNonEmpty(text);
         StringBuilder out = new StringBuilder(text.length() + 16);
         boolean inRun = false;
         for (int i = 0; i < text.length();) {
@@ -207,7 +220,7 @@ public final class EqText {
 
     /** "abc" -> "a b c": single-character TalkBack navigation spelled out. */
     public static String expandSpelling(String text) {
-        if (text == null || text.isEmpty()) return text == null ? "" : text;
+        text = requireNonEmpty(text);
         StringBuilder out = new StringBuilder(text.length() * 2);
         for (int i = 0; i < text.length();) {
             int cp = text.codePointAt(i);
@@ -228,7 +241,7 @@ public final class EqText {
 
     /** "abc" -> "Alpha Bravo Charlie" (NATO phonetic alphabet). */
     public static String expandPhonetic(String text) {
-        if (text == null || text.isEmpty()) return text == null ? "" : text;
+        text = requireNonEmpty(text);
         StringBuilder out = new StringBuilder(text.length() * 6);
         for (int i = 0; i < text.length();) {
             int cp = text.codePointAt(i);
@@ -265,7 +278,7 @@ public final class EqText {
 
     /** Code reading: every programming symbol spoken ("{" -> "left brace"). */
     public static String expandProgrammingSymbols(String text) {
-        if (text == null || text.isEmpty()) return text == null ? "" : text;
+        text = requireNonEmpty(text);
         StringBuilder out = new StringBuilder(text.length() + 32);
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
@@ -287,9 +300,8 @@ public final class EqText {
 
     /** Punctuation preset: expand each listed character to its spoken name. */
     public static String expandPunctuation(String text, String chars) {
-        if (text == null || text.isEmpty() || chars == null || chars.isEmpty()) {
-            return text == null ? "" : text;
-        }
+        text = requireNonEmpty(text);
+        if (chars == null || chars.isEmpty()) return text;
         StringBuilder out = new StringBuilder(text.length() + 32);
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
@@ -582,7 +594,7 @@ public final class EqText {
 
     /** Clock times and numeric dates as words (English names). */
     public static String expandTimeDate(String text) {
-        if (text == null || text.isEmpty()) return text == null ? "" : text;
+        text = requireText(text);
         if (text.indexOf(':') < 0 && text.indexOf('/') < 0 && text.indexOf('-') < 0) {
             return text;
         }

@@ -35,6 +35,17 @@
 
 #include "eci.h"
 
+/* Sanitize internal NUL bytes in a UTF-8 string by replacing them with spaces.
+ * This prevents premature string termination in C engine calls when Java
+ * strings contain internal NUL bytes (allowed by Modified UTF-8). */
+static inline void eq_sanitize_nul_bytes(char *str, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        if (str[i] == '\0') {
+            str[i] = ' ';
+        }
+    }
+}
+
 #ifdef __ANDROID__
 #include <jni.h>
 #include <pthread.h>
