@@ -1002,10 +1002,15 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamCreate(JNIEnv *env, jclass cls,
     pthread_cond_init(&s->room, NULL);
     pthread_cond_init(&s->filled, NULL);
     pthread_cond_init(&s->work, NULL);
+    int cleanup_mutex = 1, cleanup_room = 1, cleanup_filled = 1, cleanup_work = 1;
     eciRegisterCallback(h, eq_stream_message, s);
     if (!eciSetOutputBuffer(h, EQ_STREAM_FRAME, s->frame)) {
         eciDelete(h);
         free(s->ring);
+        pthread_cond_destroy(&s->work);
+        pthread_cond_destroy(&s->filled);
+        pthread_cond_destroy(&s->room);
+        pthread_mutex_destroy(&s->lock);
         free(s);
         eq_port_release();
         return 0;
@@ -1026,6 +1031,10 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamCreate(JNIEnv *env, jclass cls,
     if (pthread_create(&s->worker, &attr, eq_stream_worker, s) != 0) {
         pthread_attr_destroy(&attr);
         eciDelete(h);
+        pthread_cond_destroy(&s->work);
+        pthread_cond_destroy(&s->filled);
+        pthread_cond_destroy(&s->room);
+        pthread_mutex_destroy(&s->lock);
         free(s->ring);
         free(s);
         eq_port_release();
@@ -1338,4 +1347,23 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamDictLoad(JNIEnv *env, jclass cl
     answer = eciLoadDict(s->handle, dict, (int)volume, name);
     (*env)->ReleaseStringUTFChars(env, path, name);
     return (jint)answer;
+}
+
+/* Clean up global eq_extras list on library unload. */
+JNIEXPORT void JNICALL
+JNI_OnUnload(JavaVM *vm, void *reserved)
+{
+    (void)vm;
+    (void)reserved;
+    eq_extra *e = eq_extras;
+    while (e) {
+        eq_extra *next = e->next;
+        if (e->dict) {
+            eciSetDict(e->handle, NULL_DICT_HAND);
+            eciDeleteDict(e->handle, e->dict);
+        }
+        free(e);
+        e = next;
+    }
+    eq_extras = NULL;
 }

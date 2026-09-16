@@ -16,6 +16,9 @@
 
 package com.eloquick.tts;
 
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
 /**
  * "Audio Optimizer" - a speech-tailored two-band tone shaper plus a gentle loudness leveler and
  * clip guard. Started as a port of eloquence-revived's AudioOptimizer, re-tuned for EloQuick's
@@ -36,9 +39,8 @@ package com.eloquick.tts;
  * Clip guard: a same-sample-snap/eased-release limiter just under full scale, a safety net for
  * the two boosts above stacking on an already-loud passage, not a loudness target.
  *
- * Stateful (each filter tracks its previous sample) - construct one instance per synthesis
- * request, not a shared/reused one: reusing an instance across utterances would carry stale
- * filter state (and a stale limiter/leveler gain) into the next one.
+ * Instances are pooled by sample rate and profile. Call {@link #reset()} between utterances
+ * to clear filter/leveler state without allocating a new instance.
  */
 public final class AudioOptimizer {
 
@@ -72,7 +74,35 @@ public final class AudioOptimizer {
     // [-1, 1] before saturation without a hardware float division in the per-sample loop.
     private static final float INV_32768 = 1f / 32768f;
 
+    // Pool keyed by sampleRateHz|profileOrdinal for thread-safe reuse
+    private static final ConcurrentMap<Long, AudioOptimizer> POOL = new ConcurrentHashMap<>();
+
     /**
+     * Gets a pooled optimizer instance for the given sample rate and profile.
+     * Caller must call {@link #reset()} before use to clear any stale state.
+     */
+    public static AudioOptimizer acquire(int sampleRateHz, Profile profile) {
+        long key = ((long) sampleRateHz << 8) | profile.ordinal();
+        return POOL.computeIfAbsent(key, k -> new AudioOptimizer(sampleRateHz, profile));
+    }
+
+    /**
+     * Resets all filter and leveler state to initial values.
+     * Must be called before processing a new utterance.
+     */
+    public void reset() {
+        prevInput = 0f;
+        prevHighPass = 0f;
+        presenceBand = 0f;
+        warmthLowPass = 0f;
+        levelEnvelope = 0f;
+        levelerSmoothedGain = 1f;
+        smoothedGain = 1f;
+        prevPresenceBand = 0f;
+        prevWarmthLowPass = 0f;
+}
+
+/**
      * One-pole IIR alpha for the EMA lowpass form {@code y += alpha*(x-y)} at a corner of
      * {@code cornerHz} and the stream's actual {@code sampleRateHz}. Only correct for *this*
      * recurrence - see {@link #onePoleHighpassPole} for the different (complementary) coefficient

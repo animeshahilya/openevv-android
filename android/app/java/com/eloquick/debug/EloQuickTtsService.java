@@ -399,11 +399,11 @@ public class EloQuickTtsService extends TextToSpeechService {
         }
         Opening opening = new Opening(callback, hz);
         Pace pace = new Pace((long) hz * 2);
-        // Post-synthesis tone shaping: one stateful instance per utterance,
-        // never shared (filter/limiter state must not leak across requests).
+        // Post-synthesis tone shaping: pooled instance, reset per utterance.
         AudioOptimizer optimizer = EqPrefs.optimizer(this)
-                ? new AudioOptimizer(hz, optimizerProfile(EqPrefs.optimizerProfile(this)))
+                ? AudioOptimizer.acquire(hz, optimizerProfile(EqPrefs.optimizerProfile(this)))
                 : null;
+        if (optimizer != null) optimizer.reset();
         int size = Math.max(MIN_CHUNK, Math.min(MAX_CHUNK, callback.getMaxBufferSize()));
         byte[] buffer = new byte[size];
         while (!stopped) {
