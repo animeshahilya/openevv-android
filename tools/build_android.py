@@ -251,7 +251,7 @@ def build_abi(abi, ndk_root, debug=False, langs=None, api_override=None,
     for root, _dirs, files in os.walk(os.path.join(ROOT, "src")):
         src_dirs.append(root)
         for fn in files:
-            if fn.endswith(".c") and fn != "port_win32.c":
+            if fn.endswith(".c") and fn != "port_win32.c" and not (fn == "klatt_fx_neon.c" and abi != "arm64-v8a"):
                 src_files.append(os.path.join(root, fn))
 
     lang_files = [langs_c]

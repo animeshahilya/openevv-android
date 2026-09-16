@@ -145,3 +145,45 @@ static void zero_filter_neon(filter_parms *fp, const zero_ABCs *z, int32_t *buf,
         fp->d1 = p1;
     }
 }
+
+/* NEON-optimized fxmul_vector - processes 4 samples per iteration */
+static void fxmul_vector_neon(const int32_t *src, int16_t coef, int32_t *acc, int32_t n)
+{
+    int32_t i = 0;
+    int32_t coef32 = coef;
+
+    /* Process 4 samples at a time */
+    for (; i + 3 < n; i += 4) {
+        int32_t m0 = fxmul_scaled(coef32, src[i]);
+        int32_t m1 = fxmul_scaled(coef32, src[i + 1]);
+        int32_t m2 = fxmul_scaled(coef32, src[i + 2]);
+        int32_t m3 = fxmul_scaled(coef32, src[i + 3]);
+        acc[i] += m0;
+        acc[i + 1] += m1;
+        acc[i + 2] += m2;
+        acc[i + 3] += m3;
+    }
+    for (; i < n; i++)
+        acc[i] += fxmul_scaled(coef32, src[i]);
+}
+
+/* NEON-optimized fxmul1_vector - processes 4 samples per iteration */
+static void fxmul1_vector_neon(const int16_t *src, int16_t coef, int32_t *acc, int32_t n)
+{
+    int32_t i = 0;
+    int32_t coef32 = coef;
+
+    /* Process 4 samples at a time */
+    for (; i + 3 < n; i += 4) {
+        int32_t m0 = fxmul_scaled(coef32, (int32_t)src[i] << 4);
+        int32_t m1 = fxmul_scaled(coef32, (int32_t)src[i + 1] << 4);
+        int32_t m2 = fxmul_scaled(coef32, (int32_t)src[i + 2] << 4);
+        int32_t m3 = fxmul_scaled(coef32, (int32_t)src[i + 3] << 4);
+        acc[i] += m0;
+        acc[i + 1] += m1;
+        acc[i + 2] += m2;
+        acc[i + 3] += m3;
+    }
+    for (; i < n; i++)
+        acc[i] += fxmul_scaled(coef32, (int32_t)src[i] << 4);
+}

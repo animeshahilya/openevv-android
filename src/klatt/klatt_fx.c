@@ -5,6 +5,14 @@
 #include "klatt_fx.h"
 #include "klatt_tables.h"
 
+#if defined(__ARM_NEON__) && defined(__aarch64__)
+#include <arm_neon.h>
+#define KLATT_HAVE_NEON 1
+#elif defined(__SSE2__)
+#include <emmintrin.h>
+#define KLATT_HAVE_SSE2 1
+#endif
+
 /* The original relies on >> sign-extending negative operands, which C leaves
    implementation-defined. Every compiler we target does this; fail the build
    rather than produce silently wrong audio on one that does not. */
@@ -157,6 +165,7 @@ typedef char filter_parms_is_84_bytes[sizeof(filter_parms) == 84 ? 1 : -1];
    coefficients are held at three different fixed-point scales. */
 static void pole_filter_wide(filter_parms *fp, int32_t *buf, int32_t n);
 
+#ifndef KLATT_HAVE_NEON
 void pole_filter(filter_parms *fp, int32_t *buf, int32_t n)
 {
     int32_t i, count, k, t1, t2, t3;
@@ -238,6 +247,7 @@ void pole_filter(filter_parms *fp, int32_t *buf, int32_t n)
         fp->d1 = buf[i - 1];
     }
 }
+#endif
 
 /* The same resonator with no input term and no ramp: it runs purely on its
    own history, which is what the parallel branch wants when the excitation is

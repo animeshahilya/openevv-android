@@ -156,4 +156,9 @@ void parallel0_filter(filter_parms *fp, int32_t *buf, int32_t n);
 
 extern const char KlattVersionString[];
 
+/* Runtime dispatch for NEON-optimized functions */
+void pole_filter_init(void);
+void zero_filter_init(void);
+void fxmul_vector_init(void);
+
 #endif
