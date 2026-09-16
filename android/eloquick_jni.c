@@ -104,6 +104,11 @@ typedef struct {
 static pthread_mutex_t eq_port_lock = PTHREAD_MUTEX_INITIALIZER;
 static int eq_live_instances = 0;
 
+/* Dedicated mutex for EVV_HETERO environment variable manipulation in
+ * eq_new_ex_hetero. This avoids deadlock with eq_port_lock which is held
+ * across eq_create_for_language calls from nativeCreate/nativeStreamCreate. */
+static pthread_mutex_t eq_hetero_env_lock = PTHREAD_MUTEX_INITIALIZER;
+
 /* Forward: per-instance extras (dictionary set), defined below;
    nativeDestroy consults it so nothing leaks. */
 static int eq_extra_drop(ECIHand h);
@@ -806,7 +811,10 @@ Java_com_eloquick_tts_EloQuickEngine_nativeSetHeteroDefault(JNIEnv *env, jclass 
 }
 
 /* eciNewEx with the hetero default in force. Serialized: the env is
-   process-global, so two creations with different wants must not overlap. */
+   process-global, so two creations with different wants must not overlap.
+   Uses eq_hetero_env_lock (not eq_port_lock) to avoid deadlock with
+   eq_port_acquire which is held across this call from nativeCreate/
+   nativeStreamCreate. */
 static ECIHand eq_new_ex_hetero(int language)
 {
     ECIHand h;
@@ -815,7 +823,7 @@ static ECIHand eq_new_ex_hetero(int language)
     const char *prev;
     pthread_mutex_lock(&eq_hetero_lock);
     want = eq_hetero_default;
-    pthread_mutex_lock(&eq_port_lock);
+    pthread_mutex_lock(&eq_hetero_env_lock);
     if (want) {
         prev = getenv("EVV_HETERO");
         if (prev) {
@@ -834,7 +842,7 @@ static ECIHand eq_new_ex_hetero(int language)
             unsetenv("EVV_HETERO");
         }
     }
-    pthread_mutex_unlock(&eq_port_lock);
+    pthread_mutex_unlock(&eq_hetero_env_lock);
     pthread_mutex_unlock(&eq_hetero_lock);
     return h;
 }
