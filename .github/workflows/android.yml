@@ -34,6 +34,10 @@ jobs:
         run: |
           python3 tools/build_android.py --abi ${{ matrix.abi }}
 
+      - name: Build debug APK (${{ matrix.abi }})
+        run: |
+          python3 tools/build_debug_apk.py --abi ${{ matrix.abi }}
+
       - name: Verify 16KB ELF Page Alignment
         run: |
           for so in build/android/${{ matrix.abi }}/libeloquick.so build/android/${{ matrix.abi }}/libopenevv.so; do
@@ -93,3 +97,4 @@ jobs:
             build/android/${{ matrix.abi }}/libopenevv.so
             build/android/${{ matrix.abi }}/eloquick
             build/android/${{ matrix.abi }}/evv
+            build/eloquick-debug-${{ matrix.abi }}.apk
