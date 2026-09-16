@@ -275,10 +275,11 @@ public class EloQuickTtsService extends TextToSpeechService {
         return (loc[0] + "-" + loc[1]).toLowerCase(java.util.Locale.ROOT);
     }
 
-    /** Pre-synthesis text pipeline: user rules, reading modes, number and
-     *  symbol expansion, normalization, emoji, punctuation. Each step is
-     *  behind its own EqPrefs toggle; the engine never sees SSML here
-     *  (it takes backtick annotations, not markup). */
+    /** Pre-synthesis text pipeline: normalization, user rules, engine
+     *  guards, reading modes, number and symbol expansion, flattening,
+     *  emoji, punctuation. Pauses run last: they add `p annotations, and
+     *  anything rewriting text after them would corrupt those. The engine
+     *  never sees SSML here (it takes backtick annotations, not markup). */
     private String preprocess(String raw, int language) {
         String text = raw;
         String mode = EqPrefs.readingMode(this);
@@ -286,12 +287,18 @@ public class EloQuickTtsService extends TextToSpeechService {
         boolean phonetic = EqPrefs.READING_PHONETIC.equals(mode);
         boolean code = EqPrefs.READING_CODE.equals(mode);
 
+        if (EqPrefs.unicodeNorm(this)) text = EqText.normalize(text);
         if (EqPrefs.userRules(this)) {
             text = EqUserRules.apply(this, text, languageTag(language));
         }
+        // Measured engine guards + scoped roman numerals: unconditional,
+        // each a no-op where the engine already coped.
+        text = EqText.fixEngineText(text);
+        text = EqText.expandRomanNumerals(text);
         // Single-character utterance: TalkBack/NVDA character navigation.
         // NATO phonetics is the useful expansion here (spelling "a" is "a").
-        if (text.trim().length() == 1 && phonetic) {
+        boolean singleChar = text.trim().length() == 1;
+        if (singleChar && phonetic) {
             text = EqText.expandPhonetic(text);
         }
         if (code || EqPrefs.progSymbols(this)) {
@@ -310,7 +317,7 @@ public class EloQuickTtsService extends TextToSpeechService {
         } else if (phonetic) {
             text = EqText.expandPhonetic(text);
         }
-        if (EqPrefs.unicodeNorm(this)) text = EqText.normalize(text);
+        text = EqText.flattenWestern(text);
         // Watchdog: always strip broken surrogates and hang-inducing
         // controls, even with every other option off.
         text = EqText.stripUnpairedSurrogates(text);
@@ -319,8 +326,15 @@ public class EloQuickTtsService extends TextToSpeechService {
             text = EqPrefs.EMOJI_IGNORE.equals(EqPrefs.emojiMode(this))
                     ? EqText.filterEmojis(text) : EqText.clarifyEmojis(text);
         }
+        // Bullets silenced before chosen marks are expanded; a lone mark
+        // under the finger (character navigation) is never stripped.
+        if (EqPrefs.quietPunct(this) && !singleChar) {
+            text = EqText.stripIsolatedPunctuation(text);
+        }
         String punct = EqPrefs.punctChars(this);
         if (!punct.isEmpty()) text = EqText.expandPunctuation(text, punct);
+        // Pause annotations last: text rewrites after them corrupt the marks.
+        text = EqText.shortenPauses(text, EqPrefs.pauseMode(this), true);
         return text;
     }
 
@@ -378,7 +392,7 @@ public class EloQuickTtsService extends TextToSpeechService {
         }
         String text = "`vs" + Eci.clampVoice(Eci.VOICE_SPEED, speed)
                 + " `vb" + Eci.clampVoice(Eci.VOICE_PITCH_BASELINE, pitch)
-                + " `pp0 " + raw;
+                + (EqPrefs.phrasePrediction(this) ? " `pp1 " : " `pp0 ") + raw;
         if (!EloQuickEngine.nativeStreamSpeak(s, text)) {
             callback.error(TextToSpeech.ERROR_SYNTHESIS);
             return;

@@ -43,6 +43,18 @@ public final class EqPrefs {
     public static final String KEY_FORCE_RATE = "force_rate";
     public static final String KEY_FORCE_PITCH = "force_pitch";
 
+    // Pause shaping (evvdroid's JAWS-like pauses): keep / end-only / all.
+    public static final String KEY_PAUSES = "pause_mode";
+    // Phrase prediction (`pp1): prose intonation, off unless asked.
+    public static final String KEY_PHRASE = "phrase_prediction";
+    // Silence whitespace-bounded punctuation bullets (IBM stayed silent).
+    public static final String KEY_QUIET_PUNCT = "quiet_punctuation";
+
+    /** Pause modes. */
+    public static final String PAUSES_KEEP = "keep";
+    public static final String PAUSES_END_ONLY = "end";
+    public static final String PAUSES_ALL = "all";
+
     /** Emoji handling. */
     public static final String EMOJI_ANNOUNCE = "announce";
     public static final String EMOJI_IGNORE = "ignore";
@@ -178,6 +190,25 @@ public final class EqPrefs {
         return of(c).getBoolean(KEY_FORCE_PITCH, false);
     }
 
+    public static String pauses(Context c) {
+        return of(c).getString(KEY_PAUSES, PAUSES_END_ONLY);
+    }
+
+    public static int pauseMode(Context c) {
+        String mode = pauses(c);
+        if (PAUSES_ALL.equals(mode)) return EqText.PAUSES_ALL;
+        if (PAUSES_KEEP.equals(mode)) return EqText.PAUSES_KEEP;
+        return EqText.PAUSES_END_ONLY;
+    }
+
+    public static boolean phrasePrediction(Context c) {
+        return of(c).getBoolean(KEY_PHRASE, false);
+    }
+
+    public static boolean quietPunct(Context c) {
+        return of(c).getBoolean(KEY_QUIET_PUNCT, true);
+    }
+
     /** Bumped whenever the dictionary file changes; the service reloads
      *  when the revision it loaded differs. */
     public static int dictRev(Context c) {
@@ -262,6 +293,18 @@ public final class EqPrefs {
 
     public static void setForcePitch(Context c, boolean on) {
         of(c).edit().putBoolean(KEY_FORCE_PITCH, on).apply();
+    }
+
+    public static void setPauses(Context c, String mode) {
+        of(c).edit().putString(KEY_PAUSES, mode).apply();
+    }
+
+    public static void setPhrasePrediction(Context c, boolean on) {
+        of(c).edit().putBoolean(KEY_PHRASE, on).apply();
+    }
+
+    public static void setQuietPunct(Context c, boolean on) {
+        of(c).edit().putBoolean(KEY_QUIET_PUNCT, on).apply();
     }
 
     public static void bumpDictRev(Context c) {

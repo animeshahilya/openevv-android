@@ -429,6 +429,40 @@ public class MainActivity extends Activity {
             }
         });
         root.addView(forcePitchBox);
+        final String[] pauseNames = {"as written", "trim end only", "shorten all"};
+        final String[] pauseValues = {EqPrefs.PAUSES_KEEP, EqPrefs.PAUSES_END_ONLY,
+                EqPrefs.PAUSES_ALL};
+        Spinner pauseSpinner = new Spinner(this);
+        pauseSpinner.setAdapter(new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_dropdown_item, pauseNames));
+        root.addView(labeled("Engine pauses",
+                spinPick(pauseSpinner, indexOf(pauseValues, EqPrefs.pauses(this)),
+                        new SpinChoice() {
+                            @Override
+                            public void picked(int pos) {
+                                EqPrefs.setPauses(MainActivity.this, pauseValues[pos]);
+                            }
+                        })));
+        CheckBox phraseBox = new CheckBox(this);
+        phraseBox.setText("Phrase tune-up (prose intonation, not fragments)");
+        phraseBox.setChecked(EqPrefs.phrasePrediction(this));
+        phraseBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton b, boolean on) {
+                EqPrefs.setPhrasePrediction(MainActivity.this, on);
+            }
+        });
+        root.addView(phraseBox);
+        CheckBox quietBox = new CheckBox(this);
+        quietBox.setText("Silence bullet separators ('-' '*' lines)");
+        quietBox.setChecked(EqPrefs.quietPunct(this));
+        quietBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton b, boolean on) {
+                EqPrefs.setQuietPunct(MainActivity.this, on);
+            }
+        });
+        root.addView(quietBox);
         TextView rateLabel = new TextView(this);
         rateLabel.setText("Sound quality");
         root.addView(rateLabel);
@@ -799,11 +833,74 @@ public class MainActivity extends Activity {
         pass &= checkText("currency",
                 EqText.expandCurrency("it costs $5.00").equals("it costs 5.00 dollars"));
         pass &= checkText("time",
-                EqText.expandTimeDate("at 3:30").equals("at 3 30"));
+                EqText.expandTimeDate("at 3:30").equals("at three thirty"));
+        pass &= checkText("time-am",
+                EqText.expandTimeDate("at 10:30 AM").equals("at ten thirty AM"));
+        pass &= checkText("time-oh",
+                EqText.expandTimeDate("at 12:05").equals("at twelve oh five"));
+        pass &= checkText("time-midnight",
+                EqText.expandTimeDate("at 00:30").equals("at midnight thirty"));
         pass &= checkText("time-oclock",
-                EqText.expandTimeDate("at 3:00").equals("at 3 o'clock"));
+                EqText.expandTimeDate("at 3:00").equals("at three o'clock"));
+        pass &= checkText("time-bad",
+                EqText.expandTimeDate("at 13:00 PM").equals("at 13:00 PM"));
         pass &= checkText("date",
-                EqText.expandTimeDate("on 2026-09-16").equals("on 16 September 2026"));
+                EqText.expandTimeDate("on 2026-09-16")
+                        .equals("on twenty twenty-six September sixteenth"));
+        pass &= checkText("date-dmy",
+                EqText.expandTimeDate("on 14/07/2024")
+                        .equals("on fourteenth July twenty twenty-four"));
+        pass &= checkText("date-mdy",
+                EqText.expandTimeDate("on 07/14/2024")
+                        .equals("on July fourteenth twenty twenty-four"));
+        pass &= checkText("date-2digit",
+                EqText.expandTimeDate("on 14/07/24")
+                        .equals("on fourteenth July twenty twenty-four"));
+        pass &= checkText("date-ambiguous",
+                EqText.expandTimeDate("on 05/08/2024").equals("on 05/08/2024"));
+        pass &= checkText("date-idiom",
+                EqText.expandTimeDate("open 24/7").equals("open 24/7"));
+        pass &= checkText("words",
+                (EqText.cardinalWord(22).equals("twenty-two")
+                        && EqText.ordinalWord(22).equals("twenty-second")
+                        && EqText.yearWord(1900).equals("nineteen hundred")
+                        && EqText.yearWord(2000).equals("two thousand")
+                        && EqText.yearWord(1905).equals("nineteen oh five")));
+        pass &= checkText("roman-section",
+                EqText.expandRomanNumerals("read Chapter IV").equals("read Chapter 4"));
+        pass &= checkText("roman-monarch",
+                EqText.expandRomanNumerals("Henry VIII").equals("Henry the eighth"));
+        pass &= checkText("roman-prose",
+                EqText.expandRomanNumerals("I V said").equals("I V said"));
+        pass &= checkText("flatten",
+                EqText.flattenWestern("\u201Chi\u201D \u2014 ok\u2026")
+                        .equals("\"hi\" - ok..."));
+        pass &= checkText("fix-digit",
+                EqText.fixEngineText("teamtalk5").equals("teamtalk 5"));
+        pass &= checkText("fix-opener",
+                EqText.fixEngineText("abc(def").equals("abc (def"));
+        pass &= checkText("fix-plural",
+                EqText.fixEngineText("books (s)").equals("books(s)"));
+        pass &= checkText("fix-space-mark",
+                EqText.fixEngineText("wait .").equals("wait."));
+        pass &= checkText("fix-thousands",
+                EqText.fixEngineText("Pay 1,000,000 now").equals("Pay 1000000 now"));
+        pass &= checkText("pauses-keep",
+                EqText.shortenPauses("Hello. World", EqText.PAUSES_KEEP, true)
+                        .equals("Hello. World"));
+        pass &= checkText("pauses-end",
+                EqText.shortenPauses("Hello. World", EqText.PAUSES_END_ONLY, true)
+                        .equals("Hello. World `p100"));
+        pass &= checkText("pauses-all",
+                EqText.shortenPauses("Hello. World", EqText.PAUSES_ALL, true)
+                        .equals("Hello `p1. World `p100"));
+        pass &= checkText("pauses-decimal",
+                EqText.shortenPauses("Pi is 3.14", EqText.PAUSES_ALL, false)
+                        .equals("Pi is 3.14"));
+        pass &= checkText("quiet-bullet",
+                EqText.stripIsolatedPunctuation("a - b").equals("a b"));
+        pass &= checkText("quiet-attached",
+                EqText.stripIsolatedPunctuation("wait...").equals("wait..."));
         pass &= checkText("spelling",
                 EqText.expandSpelling("ab").equals("a b"));
         pass &= checkText("phonetic",

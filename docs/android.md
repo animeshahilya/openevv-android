@@ -235,7 +235,7 @@ The debug app is a small real app, not just a harness. Sections:
 - **Voice tuning**: preset persists; speed slider (0–250) shapes voice 0; Preview.
 - **Pronunciation dictionary**: teach key/say pairs, tap to forget. Stored as key-TAB-say in device-protected storage, loaded per service instance; each key expanded to its case forms (the engine matches exact bytes). Files over 256 KB are refused rather than loaded (hundred-thousand-entry dictionaries hang the engine -- measured upstream of here).
 - **My words**: Java-side rewrite rules applied in the service before the engine hears the text (regex-capable, whole-word/case options, language-scoped, NVDA dictionary semantics). Persisted as JSON in device-protected storage; complements the engine file above rather than replacing it.
-- **Reading**: heteronym-correction toggle (creation-time, off default), engine sample-rate choice, Wednesday-misspelling guard (on default), sound polish (two-band presence/warmth + leveler + clip guard, gentle/balanced/full), Unicode normalization (on default: styled text reads as words), emoji announce/ignore, long-number grouping (single/double/triple), currency and time/date expansion, reading mode (normal/spelling/NATO phonetic/code), programming-symbol expansion, speak-punctuation presets (none/some/most/all/custom), and speed/pitch locks against caller apps. The self-test covers every transform deterministically (`selftest text ...` lines).
+- **Reading**: heteronym-correction toggle (creation-time, off default), engine sample-rate choice, Wednesday-misspelling guard (on default), sound polish (two-band presence/warmth + leveler + clip guard, gentle/balanced/full), Unicode normalization (on default: styled text reads as words), emoji announce/ignore, long-number grouping (single/double/triple), currency and natural time/date expansion ("ten thirty AM", "fourteenth July twenty twenty-four"; ambiguous dates untouched), reading mode (normal/spelling/NATO phonetic/code), programming-symbol expansion, speak-punctuation presets (none/some/most/all/custom), and speed/pitch locks against caller apps. Always-on engine guards: Western flattening (smart quotes/dashes to ASCII -- the conversion the JNI contract promises), letter-digit/opener fixes, grouped-thousands repair, contextual Roman numerals ("Chapter IV", "Henry VIII"), bullet silencing, and pause shaping (trim end / shorten all, with anti-clip tail). Phrase prediction (`pp1`) is opt-in for prose. The self-test covers every transform deterministically (`selftest text ...` lines).
 
 All settings live in device-protected `SharedPreferences`, so the directBootAware service reads them before first unlock; the service recreates its session whenever language, preset, speed, hetero, rate or dictionary revision changes. Intent automation (`text`/`lang`/`voice`, `selftest`, `fwtest`) is unchanged, plus:
 
@@ -264,4 +264,24 @@ chmod +x $PREFIX/bin/evv
 
 # Speak or generate audio
 evv -o test.wav "OpenEVV running natively on Android via Termux."
+```
+
+`cli/openevv-say` (Storm Dragon's helper, via upstream) is a friendlier
+front end with espeak-like flags (`-v` voice, `-s`/`-p`/`-P`/`-a`,
+`-R` rate, `-L` language, `-r` real-world units, `--voices`,
+`--languages`, `-w` to write a WAV). It finds `evv` beside itself, on
+`PATH`, or via `OPENEVV_EVV`:
+
+```bash
+cp cli/openevv-say $PREFIX/bin/openevv-say
+chmod +x $PREFIX/bin/openevv-say
+OPENEVV_EVV=$PREFIX/bin/evv openevv-say -s 60 "Hello from OpenEVV."
+```
+
+Playback pipes the WAV to `pw-play`/`paplay`/`aplay` (or `OPENEVV_PLAYER`),
+none of which take stdin on Termux -- write a file and play it instead:
+
+```bash
+openevv-say -w /sdcard/hello.wav "Save this instead."
+termux-media-player play /sdcard/hello.wav
 ```
