@@ -1191,7 +1191,9 @@ int32_t delta_rule_called(int which, const int32_t *stack, int argn, int want)
 
         fprintf(stderr, "  %s(", delta_rule_entry_name[which]);
         for (j = 0; j < want && j < MAXARG; j++)
-            fprintf(stderr, "%s%08x", j ? ", " : "", (unsigned)a[j]);
+            fprintf(stderr, "%s%s%08x", j ? ", " : "",
+                    ((delta_rule_argmask[which] >> j) & 1u) ? "@" : "",
+                    (unsigned)a[j]);
         fprintf(stderr, ")\n");
         fflush(stderr);
     }
@@ -1211,7 +1213,9 @@ int32_t delta_rule_direct(int which, const int32_t *a, int n)
 
         fprintf(stderr, "  %s(", delta_rule_entry_name[which]);
         for (j = 0; j < n && j < MAXARG; j++)
-            fprintf(stderr, "%s%08x", j ? ", " : "", (unsigned)a[j]);
+            fprintf(stderr, "%s%s%08x", j ? ", " : "",
+                    ((delta_rule_argmask[which] >> j) & 1u) ? "@" : "",
+                    (unsigned)a[j]);
         fprintf(stderr, ")\n");
         fflush(stderr);
     }
