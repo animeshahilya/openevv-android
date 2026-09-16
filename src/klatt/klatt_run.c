@@ -341,9 +341,13 @@ int insertPhoneme(DeltaThis *d, int32_t a, int32_t b)
 
 void resetDelayedSynthQueue(DeltaThis *d)
 {
-    void *q = SD_QUEUE(DL_DEVICE(DT_LANG(d)));
+    /* Named, not measured in bytes: IndexQueue is {vt, head, tail} of
+       pointers and then total, so 0x0c is total on 32 bits but the
+       middle of tail on 64 -- writing an int32 there truncates the
+       pointer and the reset below walks off it. */
+    IndexQueue *q = (IndexQueue *)SD_QUEUE(DL_DEVICE(DT_LANG(d)));
 
-    *(int32_t *)((char *)q + 0x0c) = 0;
+    q->total = 0;
     el_listReset(q);
 }
 
