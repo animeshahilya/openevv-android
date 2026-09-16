@@ -292,9 +292,15 @@ Java_com_eloquick_tts_EloQuickEngine_nativeSynth(JNIEnv *env, jclass cls,
     utf8 = (*env)->GetStringUTFChars(env, text, NULL);
     if (!utf8)
         return NULL;
+    nbytes = strlen(utf8);
+    /* Sanitize any internal NUL bytes so eciAddText never sees premature termination */
+    for (jsize idx = 0; idx < nbytes; idx++) {
+        if (utf8[idx] == '\0') {
+            ((char *)utf8)[idx] = ' ';
+        }
+    }
     /* Fail fast on oversize/malformed input: service callers must chunk long
      * text onto the streaming path (see EQ_MAX_* above). */
-    nbytes = strlen(utf8);
     if (nbytes == 0 || nbytes > EQ_MAX_TEXT_BYTES ||
         !eq_utf8_valid(utf8, nbytes)) {
         (*env)->ReleaseStringUTFChars(env, text, utf8);
@@ -646,6 +652,17 @@ Java_com_eloquick_tts_EloQuickEngine_nativeDictTeach(JNIEnv *env, jclass cls,
     }
     kn = strlen(k);
     sn = strlen(s);
+    /* Sanitize any internal NUL bytes so eciUpdateDict never sees premature termination */
+    for (jsize idx = 0; idx < kn; idx++) {
+        if (k[idx] == '\0') {
+            ((char *)k)[idx] = ' ';
+        }
+    }
+    for (jsize idx = 0; idx < sn; idx++) {
+        if (s[idx] == '\0') {
+            ((char *)s)[idx] = ' ';
+        }
+    }
     pair = (char *)malloc(kn + sn + 2);
     if (!pair) {
         (*env)->ReleaseStringUTFChars(env, key, k);
@@ -693,6 +710,12 @@ Java_com_eloquick_tts_EloQuickEngine_nativeDictLookup(JNIEnv *env, jclass cls,
     k = (*env)->GetStringUTFChars(env, key, NULL);
     if (!k)
         return NULL;
+    /* Sanitize any internal NUL bytes so eciDictLookup never sees premature termination */
+    for (jsize idx = 0; idx < strlen(k); idx++) {
+        if (k[idx] == '\0') {
+            ((char *)k)[idx] = ' ';
+        }
+    }
     found = eciDictLookup(h, dict, (int)volume, k);
     answer = found ? (*env)->NewStringUTF(env, found) : NULL;
     (*env)->ReleaseStringUTFChars(env, key, k);
@@ -772,6 +795,12 @@ Java_com_eloquick_tts_EloQuickEngine_nativeDictLoad(JNIEnv *env, jclass cls,
     name = (*env)->GetStringUTFChars(env, path, NULL);
     if (!name)
         return 2; /* eciDictOutOfMemory */
+    /* Sanitize any internal NUL bytes so eciLoadDict never sees premature termination */
+    for (jsize idx = 0; idx < strlen(name); idx++) {
+        if (name[idx] == '\0') {
+            ((char *)name)[idx] = ' ';
+        }
+    }
     answer = eciLoadDict(h, dict, (int)volume, name);
     (*env)->ReleaseStringUTFChars(env, path, name);
     return (jint)answer;
@@ -1083,6 +1112,12 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamSpeak(JNIEnv *env, jclass cls,
     if (!utf8)
         return JNI_FALSE;
     n = strlen(utf8);
+    /* Sanitize any internal NUL bytes so eciAddText never sees premature termination */
+    for (jsize idx = 0; idx < n; idx++) {
+        if (utf8[idx] == '\0') {
+            ((char *)utf8)[idx] = ' ';
+        }
+    }
     /* Same input contract as nativeSynth, minus the length cap rationale:
      * streaming pages through the ring, but a single multi-MB utterance still
      * pins the text + engine queue; chunk in Java instead. */
@@ -1344,6 +1379,12 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamDictLoad(JNIEnv *env, jclass cl
     name = (*env)->GetStringUTFChars(env, path, NULL);
     if (!name)
         return 2;
+    /* Sanitize any internal NUL bytes so eciLoadDict never sees premature termination */
+    for (jsize idx = 0; idx < strlen(name); idx++) {
+        if (name[idx] == '\0') {
+            ((char *)name)[idx] = ' ';
+        }
+    }
     answer = eciLoadDict(s->handle, dict, (int)volume, name);
     (*env)->ReleaseStringUTFChars(env, path, name);
     return (jint)answer;
