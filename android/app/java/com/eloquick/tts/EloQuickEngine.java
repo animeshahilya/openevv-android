@@ -56,4 +56,28 @@ public final class EloQuickEngine {
     public static native int nativeStreamGetVoiceParam(long stream, int voice, int param);
     public static native int nativeStreamSetSampleRateHz(long stream, int hz);
     public static native int nativeStreamDictLoad(long stream, int volume, String path);
+
+    /* -- Prosody / Pause / Pacing (evvdroid-style) ----------------------- */
+    /** Pause mode: 0=keep, 1=end-only, 2=all. Stored in stream struct for
+     *  the Java side to read when preparing `p annotations. */
+    public static native void nativeStreamSetPauseMode(long stream, int mode);
+    public static native int  nativeStreamGetPauseMode(long stream);
+    /** Phrase prediction: 0=off, 1=on (`pp1 annotation). */
+    public static native void nativeStreamSetPhrasePrediction(long stream, int on);
+    public static native int  nativeStreamGetPhrasePrediction(long stream);
+    /** Abbreviation expansion: 0=off, 1=on. */
+    public static native void nativeStreamSetAbbreviations(long stream, int on);
+    public static native int  nativeStreamGetAbbreviations(long stream);
+    /** Speed override: -1 = use voice default, 0-250 = engine speed. */
+    public static native void nativeStreamSetSpeed(long stream, int speed);
+    public static native int  nativeStreamGetSpeed(long stream);
+    /** Pitch override: -1 = use voice default, 0-100 = baseline. */
+    public static native void nativeStreamSetPitch(long stream, int pitch);
+    public static native int  nativeStreamGetPitch(long stream);
+    /** Max ms of audio ahead of wall clock (default 300). */
+    public static native void nativeStreamSetLeadMs(long stream, int ms);
+    public static native int  nativeStreamGetLeadMs(long stream);
+    /** Load a tab-separated text dictionary file (ISO-8859-1, key<TAB>say).
+     *  Returns the number of entries loaded, or -1 on error. */
+    public static native int nativeStreamDictLoadFile(long stream, String path);
 }

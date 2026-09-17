@@ -206,6 +206,46 @@ class EloQuickEngine {
     @JvmStatic
     external fun nativeStreamDictForget(shandle: Long)
 
+    // Prosody / Pause / Pacing (evvdroid-style)
+    @JvmStatic
+    external fun nativeStreamSetPauseMode(shandle: Long, mode: Int)
+
+    @JvmStatic
+    external fun nativeStreamGetPauseMode(shandle: Long): Int
+
+    @JvmStatic
+    external fun nativeStreamSetPhrasePrediction(shandle: Long, on: Int)
+
+    @JvmStatic
+    external fun nativeStreamGetPhrasePrediction(shandle: Long): Int
+
+    @JvmStatic
+    external fun nativeStreamSetAbbreviations(shandle: Long, on: Int)
+
+    @JvmStatic
+    external fun nativeStreamGetAbbreviations(shandle: Long): Int
+
+    @JvmStatic
+    external fun nativeStreamSetSpeed(shandle: Long, speed: Int)
+
+    @JvmStatic
+    external fun nativeStreamGetSpeed(shandle: Long): Int
+
+    @JvmStatic
+    external fun nativeStreamSetPitch(shandle: Long, pitch: Int)
+
+    @JvmStatic
+    external fun nativeStreamGetPitch(shandle: Long): Int
+
+    @JvmStatic
+    external fun nativeStreamSetLeadMs(shandle: Long, ms: Int)
+
+    @JvmStatic
+    external fun nativeStreamGetLeadMs(shandle: Long): Int
+
+    @JvmStatic
+    external fun nativeStreamDictLoadFile(shandle: Long, path: String): Int
+
     // Phonemes
     @JvmStatic
     external fun nativeGeneratePhonemes(handle: Long, text: String): ByteArray?

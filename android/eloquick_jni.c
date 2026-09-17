@@ -32,6 +32,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <errno.h>
 
 #include "eci.h"
@@ -1040,6 +1041,19 @@ typedef struct {
     unsigned char *text;
     short frame[EQ_STREAM_FRAME];
     pthread_t worker;
+
+    /* prosody / pacing / pause / dict (evvdroid-style) */
+    int pause_mode;          /* 0=keep 1=end-only 2=all */
+    int phrase_prediction;
+    int abbreviations;
+    int speed;               /* override for paced synthesis */
+    int pitch;
+    int lead_ms;             /* ms of audio to keep ahead (default 300) */
+    int64_t last_speak_ms;   /* timestamp of last speak call */
+    /* dictionary: up to 8 loaded paths */
+    #define EQ_MAX_DICTS 8
+    char *dict_paths[EQ_MAX_DICTS];
+    int   dict_count;
 } eq_stream;
 
 static int ECICALL eq_stream_message(ECIHand h, ECIMessage msg, int param, void *data)
@@ -1174,6 +1188,19 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamCreate(JNIEnv *env, jclass cls,
     eciSetParam(h, 1 /* P_INPUT_TYPE */, 1);
     eciSetParam(h, 8 /* P_REAL_WORLD_UNITS */, 0);
     eciSetParam(h, 9 /* P_LANGUAGE_DIALECT */, (int)language);
+    /* evvdroid-style defaults for prosody / pacing / pause.  These live in
+       the struct (not the engine) because the engine refuses parameter
+       writes while speaking; the Java side reads them for annotation
+       prepending. */
+    s->pause_mode       = 1;   /* end-only by default */
+    s->phrase_prediction = 0;  /* off unless asked */
+    s->abbreviations     = 1;  /* on by default */
+    s->speed             = -1; /* -1 = not overridden */
+    s->pitch             = -1;
+    s->lead_ms           = 300;
+    s->last_speak_ms     = 0;
+    s->dict_count        = 0;
+    memset(s->dict_paths, 0, sizeof(s->dict_paths));
     /* The engine runs on whichever thread calls eciSynchronize -- here the
        worker below -- so it gets room for the rule dispatcher's frames:
        8MB, virtual until touched, one per stream. */
@@ -1382,6 +1409,8 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamDestroy(JNIEnv *env, jclass cls
     pthread_mutex_destroy(&s->lock);
     free(s->text);
     free(s->ring);
+    for (int i = 0; i < s->dict_count && i < EQ_MAX_DICTS; i++)
+        free(s->dict_paths[i]);
     free(s);
 }
 
@@ -1864,4 +1893,282 @@ Java_com_eloquick_tts_EloQuickEngine_nativeGetVoiceAge(JNIEnv *env, jclass cls,
         return 0;
     static const int voice_age[] = { 30, 10, 70, 75, 25, 8, 40, 5 };
     return voice_age[voice - 1];
+}
+
+/* ========================================================================
+ * Prosody / Pause / Pacing / Abbreviation Control
+ * ========================================================================
+ *
+ * These store configuration in the stream struct.  The Java side reads them
+ * to prepare annotation prefixes (`vs`, `vb`, `pp`, `ap`) because the
+ * engine refuses eciSetParam while speaking (evvdroid's hard-won lesson).
+ */
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeStreamSetPauseMode
+ * Signature: (JI)V
+ */
+JNIEXPORT void JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamSetPauseMode(JNIEnv *env, jclass cls,
+                                                               jlong shandle, jint mode)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    (void)env;
+    (void)cls;
+    if (s) s->pause_mode = (int)mode;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamGetPauseMode(JNIEnv *env, jclass cls,
+                                                               jlong shandle)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    (void)env;
+    (void)cls;
+    return s ? (jint)s->pause_mode : 0;
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeStreamSetPhrasePrediction
+ * Signature: (JI)V
+ */
+JNIEXPORT void JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamSetPhrasePrediction(JNIEnv *env, jclass cls,
+                                                                      jlong shandle, jint on)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    (void)env;
+    (void)cls;
+    if (s) s->phrase_prediction = (int)on;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamGetPhrasePrediction(JNIEnv *env, jclass cls,
+                                                                      jlong shandle)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    (void)env;
+    (void)cls;
+    return s ? (jint)s->phrase_prediction : 0;
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeStreamSetAbbreviations
+ * Signature: (JI)V
+ */
+JNIEXPORT void JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamSetAbbreviations(JNIEnv *env, jclass cls,
+                                                                   jlong shandle, jint on)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    (void)env;
+    (void)cls;
+    if (s) s->abbreviations = (int)on;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamGetAbbreviations(JNIEnv *env, jclass cls,
+                                                                   jlong shandle)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    (void)env;
+    (void)cls;
+    return s ? (jint)s->abbreviations : 1;
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeStreamSetSpeed
+ * Signature: (JI)V
+ *
+ * Store a speed override in the stream for paced synthesis.  -1 means "use
+ * whatever the voice has".
+ */
+JNIEXPORT void JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamSetSpeed(JNIEnv *env, jclass cls,
+                                                           jlong shandle, jint speed)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    (void)env;
+    (void)cls;
+    if (s) s->speed = (int)speed;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamGetSpeed(JNIEnv *env, jclass cls,
+                                                           jlong shandle)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    (void)env;
+    (void)cls;
+    return s ? (jint)s->speed : -1;
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeStreamSetPitch
+ * Signature: (JI)V
+ */
+JNIEXPORT void JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamSetPitch(JNIEnv *env, jclass cls,
+                                                           jlong shandle, jint pitch)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    (void)env;
+    (void)cls;
+    if (s) s->pitch = (int)pitch;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamGetPitch(JNIEnv *env, jclass cls,
+                                                           jlong shandle)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    (void)env;
+    (void)cls;
+    return s ? (jint)s->pitch : -1;
+}
+
+JNIEXPORT void JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamSetLeadMs(JNIEnv *env, jclass cls,
+                                                            jlong shandle, jint ms)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    (void)env;
+    (void)cls;
+    if (s && ms >= 0) s->lead_ms = (int)ms;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamGetLeadMs(JNIEnv *env, jclass cls,
+                                                            jlong shandle)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    (void)env;
+    (void)cls;
+    return s ? (jint)s->lead_ms : 300;
+}
+
+/* ========================================================================
+ * Dictionary File Loading (ISO-8859-1 tab-separated text files)
+ * ========================================================================
+ *
+ * evvdroid's dictionary files are plain text: one "key<TAB>say" per line,
+ * ISO-8859-1 encoded.  This parses them in C for speed (large user
+ * dictionaries can have thousands of entries) and feeds each pair to the
+ * engine through eciAddText with annotation markers.
+ *
+ * The file format:
+ *   - Lines starting with '#' are comments
+ *   - Empty lines are skipped
+ *   - Each entry is: key<TAB>pronunciation
+ *   - Encoding is ISO-8859-1 (Latin-1)
+ */
+
+/* Read a whole file into a malloc'd buffer.  Returns NULL on error. */
+static char *eq_read_file(const char *path, size_t *out_len)
+{
+    FILE *f;
+    long len;
+    char *buf;
+    size_t n;
+    f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    len = ftell(f);
+    if (len <= 0 || len > 4 * 1024 * 1024) { fclose(f); return NULL; }
+    rewind(f);
+    buf = (char *)malloc((size_t)len + 1);
+    if (!buf) { fclose(f); return NULL; }
+    n = fread(buf, 1, (size_t)len, f);
+    fclose(f);
+    buf[n] = '\0';
+    if (out_len) *out_len = n;
+    return buf;
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeStreamDictLoadFile
+ * Signature: (JLjava/lang/String;)I
+ *
+ * Load a tab-separated text dictionary file into the stream's engine
+ * instance.  Returns the number of entries loaded, or -1 on error.
+ */
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamDictLoadFile(JNIEnv *env, jclass cls,
+                                                               jlong shandle, jstring path)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    const char *cpath;
+    char *buf;
+    size_t len;
+    int count = 0;
+    char stored_path[1024];
+    (void)cls;
+    if (!s || !path) return -1;
+    cpath = (*env)->GetStringUTFChars(env, path, NULL);
+    if (!cpath) return -1;
+    /* Copy the path before releasing JNI string */
+    strncpy(stored_path, cpath, sizeof(stored_path) - 1);
+    stored_path[sizeof(stored_path) - 1] = '\0';
+    buf = eq_read_file(cpath, &len);
+    (*env)->ReleaseStringUTFChars(env, path, cpath);
+    if (!buf) return -1;
+
+    /* Parse line by line: key\tpronunciation */
+    char *line = buf;
+    while (*line) {
+        char *eol;
+        char *tab;
+        /* skip BOM on first line */
+        if ((unsigned char)line[0] == 0xEF && (unsigned char)line[1] == 0xBB
+                && (unsigned char)line[2] == 0xBF) {
+            line += 3;
+            continue;
+        }
+        eol = strchr(line, '\n');
+        if (!eol) eol = line + strlen(line);
+        /* trim \r */
+        if (eol > line && *(eol - 1) == '\r') eol--;
+        if (eol == line) { line = eol + 1; continue; }
+        /* skip comments */
+        if (*line == '#') { line = (*eol) ? eol + 1 : eol; continue; }
+        tab = memchr(line, '\t', (size_t)(eol - line));
+        if (tab && tab > line) {
+            size_t klen = (size_t)(tab - line);
+            size_t slen = (size_t)(eol - tab - 1);
+            /* Build a key\0say pair for eciAddText annotation:
+               `dkey\0say` -- but we add them via the annotation path. */
+            char *pair = (char *)malloc(klen + slen + 2);
+            if (pair) {
+                memcpy(pair, line, klen);
+                pair[klen] = '\0';
+                memcpy(pair + klen + 1, tab + 1, slen);
+                pair[klen + 1 + slen] = '\0';
+                /* Use eciAddText to teach the engine the pronunciation.
+                   The `d annotation adds to the user dictionary. */
+                eciAddText(s->handle, "`d");
+                eciAddText(s->handle, pair);
+                free(pair);
+                count++;
+            }
+        }
+        line = (*eol) ? eol + 1 : eol;
+    }
+
+    /* Store the path for reload-on-reconnect */
+    if (s->dict_count < EQ_MAX_DICTS) {
+        char *stored = strdup(stored_path);
+        if (stored) {
+            free(s->dict_paths[s->dict_count]);
+            s->dict_paths[s->dict_count] = stored;
+            s->dict_count++;
+        }
+    }
+    free(buf);
+    return (jint)count;
 }
