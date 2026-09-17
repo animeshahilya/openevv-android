@@ -106,7 +106,7 @@ public class MainActivity extends Activity {
         });
 
         // ---- Say: what to hear ----
-        root.addView(sectionHeader("Say"));
+        root.addView(sectionHeader("🗣  Say"));
         textInput.setHint("Type something to hear it");
         textInput.setText("Hello from EloQuick on Android.");
         root.addView(labeled("Text", textInput));
@@ -131,7 +131,7 @@ public class MainActivity extends Activity {
         status.setText(statusLine("ready", langIds.length));
 
         // ---- Voice: who says it ----
-        root.addView(sectionHeader("Voice"));
+        root.addView(sectionHeader("🎙  Voice"));
         root.addView(labeled("Language", langSpinner));
         root.addView(labeled("Voice", voiceSpinner));
         speedLabel = new TextView(this);
@@ -159,7 +159,7 @@ public class MainActivity extends Activity {
         root.addView(speedBar);
 
         // ---- Pronunciation: teach words, tap one to forget it ----
-        root.addView(sectionHeader("Pronunciation"));
+        root.addView(sectionHeader("📖  Pronunciation"));
         TextView dictHelp = new TextView(this);
         dictHelp.setText("Teach the engine a word, then tap it below to forget it.");
         root.addView(dictHelp);
@@ -197,7 +197,7 @@ public class MainActivity extends Activity {
         refreshDictList();
 
         // ---- My words: regex-capable rules applied before the engine ----
-        root.addView(sectionHeader("My words"));
+        root.addView(sectionHeader("✏️  My Words"));
         TextView rulesHelp = new TextView(this);
         rulesHelp.setText("Rewrite text before the engine hears it, then tap a rule below to forget it.");
         root.addView(rulesHelp);
@@ -258,7 +258,7 @@ public class MainActivity extends Activity {
         refreshRulesList();
 
         // ---- Reading: how it reads ----
-        root.addView(sectionHeader("Reading"));
+        root.addView(sectionHeader("📖  Reading"));
         CheckBox heteroBox = new CheckBox(this);
         heteroBox.setText("Say 'transport' right, noun and verb (experimental)");
         heteroBox.setChecked(EqPrefs.hetero(this));
@@ -495,6 +495,9 @@ public class MainActivity extends Activity {
             }
         });
         root.addView(rateSpinner);
+
+        // ---- Audio ----
+        root.addView(sectionHeader("🔊  Audio"));
 
         // Becoming the system voice is a Settings act, not ours: one tap
         // to the right screen.
