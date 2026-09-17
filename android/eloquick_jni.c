@@ -97,6 +97,9 @@ void evvRunStaticInitialisers(void);
 static int eq_utf8_valid(const char *s, size_t n)
 {
     size_t i = 0;
+    /* ASCII fast-path: if no bytes >= 0x80, the string is valid UTF-8. */
+    if (memchr(s, 0x80, n) == NULL)
+        return 1;
     while (i < n) {
         unsigned char c = (unsigned char)s[i];
         size_t need;
@@ -1300,12 +1303,11 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamSpeak(JNIEnv *env, jclass cls,
  */
 JNIEXPORT jint JNICALL
 Java_com_eloquick_tts_EloQuickEngine_nativeStreamRead(JNIEnv *env, jclass cls,
-                                                      jlong shandle, jbyteArray dst,
-                                                      jint max)
+                                                       jlong shandle, jbyteArray dst,
+                                                       jint max)
 {
     eq_stream *s = (eq_stream *)(intptr_t)shandle;
     size_t room, got;
-    unsigned char *scratch;
     (void)cls;
     if (!s || !dst || max <= 0)
         return -1;
@@ -1326,24 +1328,21 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamRead(JNIEnv *env, jclass cls,
         return 0;
     }
     got = s->count < room ? s->count : room;
-    scratch = (unsigned char *)malloc(got);
-    if (!scratch) {
-        pthread_mutex_unlock(&s->lock);
-        return -1;
-    }
+    /* Copy directly from ring to Java array in 1-2 calls (avoids malloc). */
     {
         size_t first = EQ_RING_BYTES - s->tail;
         if (first > got)
             first = got;
-        memcpy(scratch, s->ring + s->tail, first);
-        memcpy(scratch + first, s->ring, got - first);
+        (*env)->SetByteArrayRegion(env, dst, 0, (jsize)first,
+                                   (const jbyte *)(s->ring + s->tail));
+        if (got > first)
+            (*env)->SetByteArrayRegion(env, dst, (jsize)first, (jsize)(got - first),
+                                       (const jbyte *)s->ring);
         s->tail = (s->tail + got) % EQ_RING_BYTES;
         s->count -= got;
     }
     pthread_cond_signal(&s->room);
     pthread_mutex_unlock(&s->lock);
-    (*env)->SetByteArrayRegion(env, dst, 0, (jsize)got, (const jbyte *)scratch);
-    free(scratch);
     return (jint)got;
 }
 

@@ -85,14 +85,21 @@ public final class EqPrefs {
 
     private EqPrefs() {}
 
+    /** Cached SharedPreferences reference. After the first access for any
+     *  Context, subsequent calls skip createDeviceProtectedStorageContext(). */
+    private static volatile SharedPreferences sCached;
+
     public static SharedPreferences of(Context c) {
+        SharedPreferences cached = sCached;
+        if (cached != null) return cached;
         Context storage = c;
         try {
-            // Before first unlock only device-protected storage exists.
             storage = c.createDeviceProtectedStorageContext();
         } catch (Exception ignored) {
         }
-        return storage.getSharedPreferences(NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = storage.getSharedPreferences(NAME, Context.MODE_PRIVATE);
+        sCached = prefs;
+        return prefs;
     }
 
     public static int preset(Context c) {

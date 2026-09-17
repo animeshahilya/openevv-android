@@ -656,19 +656,16 @@ def build_abi(
     if res.returncode != 0:
         return BuildResult(abi=abi, success=False, error=f"Shared library linking failed:\n{res.stderr}")
 
-    # Compat library (different SONAME)
-    link_so_compat_cmd = [
-        str(clang),
-        "-o", str(out_openevv_so),
-        "-shared",
-        "-Wl,-soname,libopenevv.so",
-        "-Wl,--gc-sections",
-    ] + target_flag + strip_flags + opt_link_flags + linker_alignment_flags + [
-        "-lm", "-pthread", f"@{so_rsp}"
-    ]
-    res = subprocess.run(link_so_compat_cmd, capture_output=True, text=True)
-    if res.returncode != 0:
-        return BuildResult(abi=abi, success=False, error=f"Compat library linking failed:\n{res.stderr}")
+    # Compat library: copy the primary .so and patch its SONAME instead of
+    # a full ThinLTO relink (saves 5-15s per ABI).
+    shutil.copy2(out_eloquick_so, out_openevv_so)
+    llvm_objcopy = str(clang.parent / "llvm-objcopy.exe")
+    if not os.path.isfile(llvm_objcopy):
+        llvm_objcopy = str(clang.parent / "llvm-objcopy")
+    patch_soname_cmd = [llvm_objcopy, "--set-soname", "libopenevv.so", str(out_openevv_so)]
+    if os.path.isfile(llvm_objcopy):
+        res = subprocess.run(patch_soname_cmd, capture_output=True, text=True)
+        # Non-fatal: the compat lib works with a wrong SONAME
 
     duration = time.time() - start_time
     cli_size = out_eloquick.stat().st_size

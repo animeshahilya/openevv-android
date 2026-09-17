@@ -306,6 +306,15 @@ public final class EqText {
 
     private static final char[] CURRENCY_SYMBOLS = {'$', 0x20AC, 0x00A3, 0x00A5, 0x20B9};
     private static final String[] CURRENCY_WORDS = {"dollars", "euros", "pounds", "yen", "rupees"};
+    /** Precompiled patterns: "SYM DIGITS" and "DIGITS SYM" for each symbol. */
+    private static final Pattern[] CURRENCY_PRE = new Pattern[CURRENCY_SYMBOLS.length * 2];
+    static {
+        for (int s = 0; s < CURRENCY_SYMBOLS.length; s++) {
+            String q = Pattern.quote(String.valueOf(CURRENCY_SYMBOLS[s]));
+            CURRENCY_PRE[s * 2]     = Pattern.compile(q + "\\s*(\\d[\\d.,]*)");
+            CURRENCY_PRE[s * 2 + 1] = Pattern.compile("(\\d[\\d.,]*)\\s*" + q);
+        }
+    }
 
     /** "$5" -> "5 dollars" (English names). Lone symbols without digits
      *  are left for flattenWestern's fallback below. */
@@ -313,12 +322,9 @@ public final class EqText {
         if (text == null || text.isEmpty()) return text == null ? "" : text;
         String out = text;
         for (int s = 0; s < CURRENCY_SYMBOLS.length; s++) {
-            char sym = CURRENCY_SYMBOLS[s];
             String word = CURRENCY_WORDS[s];
-            out = out.replaceAll(Pattern.quote(String.valueOf(sym)) + "\\s*(\\d[\\d.,]*)",
-                    "$1 " + word);
-            out = out.replaceAll("(\\d[\\d.,]*)\\s*" + Pattern.quote(String.valueOf(sym)),
-                    "$1 " + word);
+            out = CURRENCY_PRE[s * 2].matcher(out).replaceAll("$1 " + word);
+            out = CURRENCY_PRE[s * 2 + 1].matcher(out).replaceAll("$1 " + word);
         }
         return out;
     }
