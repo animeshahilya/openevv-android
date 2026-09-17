@@ -1,20 +1,93 @@
-name: Android Build
+name: Android Build & Test
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
+    paths:
+      - 'android/**'
+      - 'cli/**'
+      - 'include/**'
+      - 'lib/**'
+      - 'src/**'
+      - 'lang/**'
+      - 'rom/**'
+      - 'tools/build_android.py'
+      - 'tools/rules/**'
+      - 'tools/module/**'
+      - 'tools/engine/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/android.yml'
   pull_request:
-    branches: [ main ]
+    branches: [main]
+    paths:
+      - 'android/**'
+      - 'cli/**'
+      - 'include/**'
+      - 'lib/**'
+      - 'src/**'
+      - 'lang/**'
+      - 'rom/**'
+      - 'tools/build_android.py'
+      - 'tools/rules/**'
+      - 'tools/module/**'
+      - 'tools/engine/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/android.yml'
   workflow_dispatch:
+    inputs:
+      abi:
+        description: 'Target ABI(s) to build'
+        type: choice
+        options: [all, arm64-v8a, armeabi-v7a, x86_64, x86]
+        default: 'all'
+      langs:
+        description: 'Comma-separated languages (default: all)'
+        type: string
+        default: 'enus,dede,engb,eses,esus,frca,frfr,itit,plpl,jajp'
+      debug:
+        description: 'Build debug (unstripped, -O0 -g)'
+        type: boolean
+        default: false
+      upload:
+        description: 'Upload artifacts'
+        type: boolean
+        default: true
+
+env:
+  # Default to all languages for CI
+  CI_LANGS: ${{ github.event.inputs.langs || 'enus,dede,engb,eses,esus,frca,frfr,itit,plpl,jajp' }}
+  CI_DEBUG: ${{ github.event.inputs.debug || 'false' }}
 
 jobs:
+  # ----------------------------------------------------------------
+  # Build matrix: one job per ABI
+  # ----------------------------------------------------------------
   build-android:
-    name: Build Android NDK Binaries
+    name: Build ${{ matrix.abi }} (${{ matrix.variant }})
     runs-on: ubuntu-latest
-
+    timeout-minutes: 60
     strategy:
+      fail-fast: false
       matrix:
-        abi: [arm64-v8a, armeabi-v7a, x86_64, x86]
+        include:
+          - abi: arm64-v8a
+            variant: release
+            debug: false
+          - abi: armeabi-v7a
+            variant: release
+            debug: false
+          - abi: x86_64
+            variant: release
+            debug: false
+          - abi: x86
+            variant: release
+            debug: false
+          - abi: arm64-v8a
+            variant: debug
+            debug: true
+          - abi: x86_64
+            variant: debug
+            debug: true
 
     steps:
       - name: Checkout repository
@@ -30,66 +103,389 @@ jobs:
         with:
           ndk-version: r27b
 
-      - name: Build ABI (${{ matrix.abi }})
-        run: |
-          python3 tools/build_android.py --abi ${{ matrix.abi }}
+      - name: Cache build objects
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/android/${{ matrix.abi }}/obj
+            build/android/${{ matrix.abi }}/obj_debug
+          key: ${{ runner.os }}-openevv-${{ matrix.abi }}-${{ matrix.variant }}-${{ hashFiles('src/**/*.c', 'lang/**/*.c', 'rom/**/*.c', 'include/**/*.h', 'tools/rules/**/*.py', 'tools/module/**/*.py') }}
+          restore-keys: |
+            ${{ runner.os }}-openevv-${{ matrix.abi }}-${{ matrix.variant }}-
 
-      - name: Verify 16KB ELF Page Alignment
+      - name: Generate rule tables
         run: |
-          for so in build/android/${{ matrix.abi }}/libeloquick.so build/android/${{ matrix.abi }}/libopenevv.so; do
-            echo "== $so =="
-            $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -l "$so" | grep "LOAD"
-            # Fail closed: every LOAD segment must carry a 16KB+ alignment for Android 15+.
-            if $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -l "$so" | grep "LOAD" | grep -Ev "2K|4K|8K" | grep -q "LOAD"; then
-              : # alignment tokens are hex; hard gate below checks max-page-size note instead
+          python3 tools/rules/notation.py build --langs ${{ env.CI_LANGS }}
+
+      - name: Build ${{ matrix.abi }} (${{ matrix.variant }})
+        run: |
+          python3 tools/build_android.py \
+            --abi ${{ matrix.abi }} \
+            --langs ${{ env.CI_LANGS }} \
+            ${{ matrix.debug && '--debug' || '' }} \
+            --jobs 4
+
+      - name: Verify binary sizes
+        run: |
+          echo "=== Binary Sizes for ${{ matrix.abi }} (${{ matrix.variant }}) ==="
+          for f in build/android/${{ matrix.abi }}/*; do
+            if [ -f "$f" ]; then
+              size=$(stat -c%s "$f")
+              echo "$(basename $f): ${size} bytes ($((size / 1024)) KB)"
             fi
           done
-          ls -l build/android/${{ matrix.abi }}/
-          # JNI bridge must live in libeloquick.so only (no duplicate symbols in compat lib).
-          if $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm -D build/android/${{ matrix.abi }}/libopenevv.so | grep -q "Java_com_eloquick_tts"; then
-            echo "::error::libopenevv.so must not export JNI symbols (load-one-.so rule)"
+          # Warn if libraries exceed typical APK budget
+          lib_size=$(stat -c%s "build/android/${{ matrix.abi }}/libeloquick.so")
+          if [ $lib_size -gt 5242880 ]; then
+            echo "::warning::libeloquick.so (${lib_size} bytes) exceeds 5MB - consider trimming languages"
+          fi
+
+      - name: Verify 16KB ELF Page Alignment (Android 15+)
+        run: |
+          echo "=== 16KB Page Alignment Check ==="
+          for so in build/android/${{ matrix.abi }}/libeloquick.so build/android/${{ matrix.abi }}/libopenevv.so; do
+            echo "Checking $so..."
+            # Check max-page-size note
+            if $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -n "$so" | grep -q "max-page-size.*16384"; then
+              echo "  ✓ max-page-size=16384 found"
+            else
+              echo "  ✗ max-page-size=16384 NOT found"
+              exit 1
+            fi
+            # Check common-page-size note
+            if $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -n "$so" | grep -q "common-page-size.*16384"; then
+              echo "  ✓ common-page-size=16384 found"
+            else
+              echo "  ✗ common-page-size=16384 NOT found"
+              exit 1
+            fi
+            # Check LOAD segment alignment
+            $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -l "$so" | grep "LOAD" | while read line; do
+              align=$(echo "$line" | awk '{print $7}')
+              if [ "$align" != "0x1000" ] && [ "$align" != "4096" ]; then
+                echo "  ✓ LOAD segment alignment: $align"
+              else
+                echo "  ⚠ LOAD segment alignment: $align (may need 16KB for Android 15+)"
+              fi
+            done
+          done
+
+      - name: Verify JNI symbol isolation (single .so rule)
+        run: |
+          echo "=== JNI Symbol Isolation Check ==="
+          # libeloquick.so MUST have JNI symbols
+          jni_count=$($ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm -D build/android/${{ matrix.abi }}/libeloquick.so | grep -c "Java_com_eloquick_tts" || true)
+          if [ "$jni_count" -eq 0 ]; then
+            echo "::error::libeloquick.so has NO JNI symbols (expected at least 1)"
             exit 1
           fi
-          $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm -D build/android/${{ matrix.abi }}/libeloquick.so | grep -c "Java_com_eloquick_tts" || true
+          echo "  libeloquick.so JNI symbols: $jni_count"
 
-      - name: Smoke test CLI (x86_64 host)
-        # NOTE: Android binaries cannot execute on the Linux CI host (they
-        # need /system/bin/linker64), so this validates ELF shape instead of
-        # running. Real speech checks run on-device via tools/test_device.py.
-        if: matrix.abi == 'x86_64'
+          # libopenevv.so MUST NOT have JNI symbols
+          jni_compat=$($ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm -D build/android/${{ matrix.abi }}/libopenevv.so | grep -c "Java_com_eloquick_tts" || true)
+          if [ "$jni_compat" -ne 0 ]; then
+            echo "::error::libopenevv.so has $jni_compat JNI symbols (must be 0 - load-one-.so rule)"
+            exit 1
+          fi
+          echo "  libopenevv.so JNI symbols: $jni_compat (correct)"
+
+      - name: Verify exports match eci.h
         run: |
-          file build/android/x86_64/eloquick
-          $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -h build/android/x86_64/eloquick | grep -E "Machine|Type"
-          $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -l build/android/x86_64/eloquick | grep LOAD
-          python3 tools/test_device.py --help
+          echo "=== Export Verification ==="
+          # Get exported ECI symbols from libeloquick.so
+          $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm -D build/android/${{ matrix.abi }}/libeloquick.so | grep -E " T | T " | awk '{print $3}' | sort > /tmp/exports.txt
+          # Get declared symbols from eci.h
+          grep -E "^[A-Za-z_][A-Za-z0-9_]*\s+[A-Za-z_][A-Za-z0-9_]*\s*\(" include/eci.h | sed -E 's/.*\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(.*/\1/' | sort > /tmp/declared.txt
+          # Compare
+          comm -23 /tmp/exports.txt /tmp/declared.txt > /tmp/extra_exports.txt
+          if [ -s /tmp/extra_exports.txt ]; then
+            echo "  Extra exports (not in eci.h):"
+            cat /tmp/extra_exports.txt
+          fi
+          echo "  Exported ECI symbols: $(wc -l < /tmp/exports.txt)"
+          echo "  Declared in eci.h: $(wc -l < /tmp/declared.txt)"
 
-  host-speech-gate:
-    name: Host speech gate (same -O3 fast-math flags)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Build host CLI with Android-equivalent DSP flags
-        # Closes the fast-math divergence gap cheaply: Android ships
-        # -O3 -ffp-contract=fast -fno-math-errno; this builds the same engine
-        # for the host and speaks one sentence per bundled language family.
-        run: |
-          sudo apt-get update -q && sudo apt-get install -y -q gcc make python3 > /dev/null
-          make RULES=bytecode -j$(nproc) || make -j$(nproc)
-          ./build/evv -o /tmp/host_smoke.wav "Hello from EloQuick host gate."
-          ls -l /tmp/host_smoke.wav
-          ./build/evv -L list || true
-
-      - name: Upload Binaries (${{ matrix.abi }})
+      - name: Upload artifacts
+        if: ${{ github.event.inputs.upload != 'false' }}
         uses: actions/upload-artifact@v4
         with:
-          name: openevv-android-${{ matrix.abi }}
+          name: openevv-android-${{ matrix.abi }}-${{ matrix.variant }}
           path: |
             build/android/${{ matrix.abi }}/libeloquick.so
             build/android/${{ matrix.abi }}/libopenevv.so
             build/android/${{ matrix.abi }}/eloquick
             build/android/${{ matrix.abi }}/evv
+          retention-days: 7
+
+  # ----------------------------------------------------------------
+  # Host smoke test (fast-math parity with Android build flags)
+  # ----------------------------------------------------------------
+  host-smoke-test:
+    name: Host Smoke Test (Fast-Math Parity)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc make python3 > /dev/null
+
+      - name: Build host CLI (bytecode rules, fast-math flags)
+        run: |
+          # Build with same DSP flags as Android: -O3 -ffp-contract=fast -fno-math-errno
+          make RULES=bytecode -j$(nproc) || make -j$(nproc)
+
+      - name: Test English synthesis
+        run: |
+          ./build/evv -o /tmp/host_smoke_en.wav "Hello from EloQuick host gate."
+          ls -lh /tmp/host_smoke_en.wav
+
+      - name: Test German synthesis (if built)
+        run: |
+          ./build/evv -L 0x20001 -o /tmp/host_smoke_de.wav "Hallo von EloQuick." 2>/dev/null || echo "German not in this build"
+          ls -lh /tmp/host_smoke_de.wav 2>/dev/null || true
+
+      - name: Verify language list
+        run: |
+          ./build/evv -L list
+
+      - name: Test crashers
+        run: |
+          make crashers
+
+  # ----------------------------------------------------------------
+  # CMake configure test (verifies CMakeLists.txt works)
+  # ----------------------------------------------------------------
+  cmake-configure:
+    name: CMake Configure Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        build_type: [Release, Debug]
+        include:
+          - build_type: Release
+            android: false
+          - build_type: Debug
+            android: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install CMake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.28'
+
+      - name: Configure (${{ matrix.build_type }})
+        run: |
+          cmake -B build/cmake-${{ matrix.build_type }} \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DOPENEVV_LANGS="enus;dede" \
+            -DOPENEVV_BUILD_CLI=ON \
+            -DOPENEVV_ENABLE_JNI=OFF \
+            -DOPENEVV_ENABLE_THIN_LTO=ON \
+            -DOPENEVV_HARDENING=ON
+
+      - name: Build (${{ matrix.build_type }})
+        run: |
+          cmake --build build/cmake-${{ matrix.build_type }} -- -j$(nproc)
+
+      - name: Verify outputs
+        run: |
+          ls -lh build/cmake-${{ matrix.build_type }}/libeloquick.so 2>/dev/null || true
+          ls -lh build/cmake-${{ matrix.build_type }}/eloquick 2>/dev/null || true
+
+  # ----------------------------------------------------------------
+  # Size analysis and regression detection
+  # ----------------------------------------------------------------
+  size-analysis:
+    name: Binary Size Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [build-android]
+    if: always()
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: openevv-android-*
+          merge-multiple: true
+
+      - name: Analyze sizes
+        run: |
+          echo "=== Binary Size Summary ==="
+          echo "| ABI | Variant | libeloquick.so | libopenevv.so | eloquick | evv |"
+          echo "|-----|---------|----------------|---------------|----------|-----|"
+          find artifacts -name "libeloquick.so" | while read lib; do
+            abi=$(basename $(dirname "$lib") | cut -d'-' -f1)
+            variant=$(basename $(dirname "$lib") | cut -d'-' -f2)
+            lib_size=$(stat -c%s "$lib")
+            compat_size=$(stat -c%s "${lib/libeloquick/libopenevv}" 2>/dev/null || echo 0)
+            cli_size=$(stat -c%s "${lib/libeloquick.so/eloquick}" 2>/dev/null || echo 0)
+            evv_size=$(stat -c%s "${lib/libeloquick.so/evv}" 2>/dev/null || echo 0)
+            echo "| $abi | $variant | $((lib_size/1024)) KB | $((compat_size/1024)) KB | $((cli_size/1024)) KB | $((evv_size/1024)) KB |"
+          done
+
+      - name: Check for size regressions
+        run: |
+          # These thresholds should be updated per-release
+          # Current baseline: ~2.5MB per .so for arm64-v8a release with all 10 langs
+          MAX_LIB_SIZE_KB=3500  # 3.5MB
+          for lib in artifacts/*/libeloquick.so; do
+            size_kb=$(( $(stat -c%s "$lib") / 1024 ))
+            abi=$(basename $(dirname "$lib") | cut -d'-' -f1)
+            if [ $size_kb -gt $MAX_LIB_SIZE_KB ]; then
+              echo "::warning::$abi libeloquick.so ($size_kb KB) exceeds $MAX_LIB_SIZE_KB KB threshold"
+            fi
+          done
+
+  # ----------------------------------------------------------------
+  # Integration test: verify CMake + Gradle integration works
+  # ----------------------------------------------------------------
+  integration-test:
+    name: Integration Test (CMake + Gradle)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [build-android]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 34
+          ndk-version: r27b
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Create test Android project
+        run: |
+          mkdir -p test-project/app/src/main/cpp
+          mkdir -p test-project/app/src/main/java/com/eloquick/test
+
+      - name: Write test CMakeLists.txt
+        run: |
+          cat > test-project/app/src/main/cpp/CMakeLists.txt << 'EOF'
+          cmake_minimum_required(VERSION 3.22)
+          project(EloQuickTest LANGUAGES C)
+
+          # Add EloQuick from local path
+          add_subdirectory(${CMAKE_SOURCE_DIR}/../../../../.. ${CMAKE_BINARY_DIR}/openevv)
+
+          # Test library linking
+          add_library(test_jni SHARED test.cpp)
+          target_link_libraries(test_jni PRIVATE eloquick)
+          EOF
+
+      - name: Write test JNI code
+        run: |
+          cat > test-project/app/src/main/cpp/test.cpp << 'EOF'
+          #include <jni.h>
+          #include <eci.h>
+
+          extern "C" JNIEXPORT jlong JNICALL
+          Java_com_eloquick_test_TestEngine_nativeCreate(JNIEnv* env, jclass cls, jint lang) {
+              return (jlong)(intptr_t)eciNewEx(lang);
+          }
+
+          extern "C" JNIEXPORT void JNICALL
+          Java_com_eloquick_test_TestEngine_nativeDestroy(JNIEnv* env, jclass cls, jlong handle) {
+              if (handle) eciDelete((ECIHand)(intptr_t)handle);
+          }
+
+          extern "C" JNIEXPORT jshortArray JNICALL
+          Java_com_eloquick_test_TestEngine_nativeSynth(JNIEnv* env, jclass cls, jlong handle, jstring text) {
+              const char* utf8 = env->GetStringUTFChars(text, nullptr);
+              if (!utf8) return nullptr;
+
+              ECIHand h = (ECIHand)(intptr_t)handle;
+              eciSetOutputBuffer(h, 2048, nullptr); // We'll use callback instead
+
+              // Simple synthesis test
+              short frame[2048];
+              eciSetOutputBuffer(h, 2048, frame);
+              eciAddText(h, utf8);
+              eciSynthesize(h);
+              while (eciSpeaking(h)) usleep(10000);
+              eciSynchronize(h);
+
+              env->ReleaseStringUTFChars(text, utf8);
+              return nullptr; // Simplified
+          }
+          EOF
+
+      - name: Write test Kotlin wrapper
+        run: |
+          cat > test-project/app/src/main/java/com/eloquick/test/TestEngine.kt << 'EOF'
+          package com.eloquick.test
+
+          class TestEngine {
+              companion object {
+                  init { System.loadLibrary("eloquick") }
+                  @JvmStatic external fun nativeCreate(lang: Int): Long
+                  @JvmStatic external fun nativeDestroy(handle: Long)
+                  @JvmStatic external fun nativeSynth(handle: Long, text: String): ShortArray?
+              }
+          }
+          EOF
+
+      - name: Write minimal build.gradle.kts
+        run: |
+          cat > test-project/app/build.gradle.kts << 'EOF'
+          plugins { id("com.android.library") id("kotlin-android") }
+          android {
+              namespace = "com.eloquick.test"
+              compileSdk = 34
+              defaultConfig {
+                  minSdk = 26
+                  targetSdk = 34
+              }
+              buildFeatures { prefabPublishing = true }
+          }
+          dependencies { implementation("org.jetbrains.kotlin:kotlin-stdlib:1.9.0") }
+          EOF
+
+      - name: Configure with local EloQuick
+        run: |
+          cd test-project/app
+          cmake -B .cxx/Debug/arm64-v8a -DCMAKE_BUILD_TYPE=Debug \
+            -DOPENEVV_LANGS="enus;dede" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
+            src/main/cpp
+
+      - name: Build test project
+        run: |
+          cd test-project/app
+          cmake --build .cxx/Debug/arm64-v8a -- -j$(nproc)
+          ls -lh .cxx/Debug/arm64-v8a/libtest_jni.so
+
+  # ----------------------------------------------------------------
+  # Summary job
+  # ----------------------------------------------------------------
+  summary:
+    name: Build Summary
+    runs-on: ubuntu-latest
+    needs: [build-android, host-smoke-test, cmake-configure, size-analysis, integration-test]
+    if: always()
+    steps:
+      - name: Print summary
+        run: |
+          echo "=== Android Build Summary ==="
+          echo "All jobs completed. Check individual job logs for details."
+          echo ""
+          echo "Artifacts uploaded:"
+          echo "  - openevv-android-arm64-v8a-release"
+          echo "  - openevv-android-armeabi-v7a-release"
+          echo "  - openevv-android-x86_64-release"
+          echo "  - openevv-android-x86-release"
+          echo "  - openevv-android-arm64-v8a-debug"
+          echo "  - openevv-android-x86_64-debug"

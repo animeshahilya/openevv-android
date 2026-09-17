@@ -16,8 +16,8 @@
  *     bridge makes no fixed-size assumption: it asks with no room first,
  *     sizes to the answer, then fills.
  *
- * Streaming (nativeStreamStart/Read/Stop) follows the protocol proven in
- * trypsynth/evvdroid's evv_jni.c (MIT), reimplemented here for this
+ * Streaming (nativeStreamCreate/Speak/Read/Stop/Destroy) follows the protocol
+ * proven in trypsynth/evvdroid's evv_jni.c (MIT), reimplemented here for this
  * bridge's handle model: a ring between the engine's synthesis thread and
  * the reader, a worker thread for the two-phase end detection (neither
  * eciSpeaking nor eciSynchronize alone marks the end), and stops via
@@ -32,6 +32,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 #include "eci.h"
 
@@ -39,6 +40,7 @@
 #include <jni.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <android/log.h>
 #elif defined(__unix__) || defined(__APPLE__)
 /* Host builds (CMake without NDK) still type-check this file when a JDK is
  * present: jni.h comes from find_package(JNI) there. */
@@ -47,6 +49,22 @@
 #include <unistd.h>
 #else
 #error "android/eloquick_jni.c is POSIX-only (Android/Linux/macOS)"
+#endif
+
+/* Logging */
+#ifdef __ANDROID__
+#define LOG_TAG "EloQuick"
+#define LOGV(...) __android_log_print(ANDROID_LOG_VERBOSE, LOG_TAG, __VA_ARGS__)
+#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#else
+#define LOGV(...) fprintf(stderr, "V: " __VA_ARGS__)
+#define LOGD(...) fprintf(stderr, "D: " __VA_ARGS__)
+#define LOGI(...) fprintf(stderr, "I: " __VA_ARGS__)
+#define LOGW(...) fprintf(stderr, "W: " __VA_ARGS__)
+#define LOGE(...) fprintf(stderr, "E: " __VA_ARGS__)
 #endif
 
 /* Port lifecycle: evv_port_start() once before the first instance, and
@@ -101,6 +119,7 @@ typedef struct {
     short frame[EQ_FRAME];
 } eq_session;
 
+/* Global port lock for reference-counted engine initialization */
 static pthread_mutex_t eq_port_lock = PTHREAD_MUTEX_INITIALIZER;
 static int eq_live_instances = 0;
 
@@ -109,10 +128,8 @@ static int eq_live_instances = 0;
  * across eq_create_for_language calls from nativeCreate/nativeStreamCreate. */
 static pthread_mutex_t eq_hetero_env_lock = PTHREAD_MUTEX_INITIALIZER;
 
-/* Forward: per-instance extras (dictionary set), defined below;
-   nativeDestroy consults it so nothing leaks. */
+/* Forward declarations */
 static int eq_extra_drop(ECIHand h);
-/* Forward: eciNewEx with the hetero default in force, defined below. */
 static ECIHand eq_new_ex_hetero(int language);
 
 static void eq_port_acquire(void)
@@ -162,8 +179,8 @@ static int ECICALL eq_on_message(ECIHand h, ECIMessage msg, int param, void *dat
 /* Bind-then-create. Returns NULL when the language is absent. */
 static ECIHand eq_create_for_language(int language_or_zero)
 {
-    unsigned int langs[32];
-    int n = 32, k;
+    unsigned int langs[64];
+    int n = 64, k;
 
     /* The bind: reading the registry is what binds it. NOTE: nonzero is
        failure here (XREF cli/evv.c: eo_getAvailableLanguages), not success. */
@@ -200,6 +217,10 @@ static int eq_speak_to_session(ECIHand h, eq_session *s, const char *text)
     eciSynchronize(h);
     return 1;
 }
+
+/* ========================================================================
+ * Core Instance Management
+ * ======================================================================== */
 
 /*
  * Class:     com_eloquick_tts_EloQuickEngine
@@ -245,8 +266,8 @@ Java_com_eloquick_tts_EloQuickEngine_nativeDestroy(JNIEnv *env, jclass cls, jlon
 JNIEXPORT jintArray JNICALL
 Java_com_eloquick_tts_EloQuickEngine_nativeGetLanguages(JNIEnv *env, jclass cls)
 {
-    unsigned int langs[32];
-    int n = 32, k;
+    unsigned int langs[64];
+    int n = 64, k;
     jintArray out;
     (void)cls;
     eq_port_acquire();
@@ -268,6 +289,10 @@ Java_com_eloquick_tts_EloQuickEngine_nativeGetLanguages(JNIEnv *env, jclass cls)
     eq_port_release();
     return out;
 }
+
+/* ========================================================================
+ * Synthesis (Whole-Utterance)
+ * ======================================================================== */
 
 /*
  * Class:     com_eloquick_tts_EloQuickEngine
@@ -311,6 +336,10 @@ Java_com_eloquick_tts_EloQuickEngine_nativeSynth(JNIEnv *env, jclass cls,
     (*env)->ReleaseStringUTFChars(env, text, utf8);
     return out;
 }
+
+/* ========================================================================
+ * Parameter Control (Engine & Voice)
+ * ======================================================================== */
 
 /*
  * Class:     com_eloquick_tts_EloQuickEngine
@@ -440,6 +469,46 @@ Java_com_eloquick_tts_EloQuickEngine_nativeSetSampleRateHz(JNIEnv *env, jclass c
 
 /*
  * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeGetSampleRateHz
+ * Signature: (J)I
+ */
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeGetSampleRateHz(JNIEnv *env, jclass cls,
+                                                           jlong handle)
+{
+    (void)env;
+    (void)cls;
+    if (!(ECIHand)(intptr_t)handle)
+        return 0;
+    int idx = eciGetParam((ECIHand)(intptr_t)handle, 5 /* P_SAMPLE_RATE */);
+    if (idx < 0 || idx >= EQ_RATES)
+        return 11025;
+    return (jint)eq_rate_hz[idx];
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeSetUpsampleMethod
+ * Signature: (JI)I
+ *
+ * Sets the upsampling method for rates above 11025 Hz.
+ * 0 = sinc (default, best quality), 1 = cubic, 2 = linear, 3 = hold, 4 = zeros, 5 = none (synthesize at target rate).
+ */
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeSetUpsampleMethod(JNIEnv *env, jclass cls,
+                                                              jlong handle, jint method)
+{
+    (void)env;
+    (void)cls;
+    if (!(ECIHand)(intptr_t)handle)
+        return -1;
+    if (method < 0 || method > 5)
+        return -1;
+    return (jint)eciSetParam((ECIHand)(intptr_t)handle, 10 /* P_UPSAMPLE_METHOD */, (int)method);
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
  * Method:    nativeVersion
  * Signature: ()Ljava/lang/String;
  */
@@ -454,12 +523,73 @@ Java_com_eloquick_tts_EloQuickEngine_nativeVersion(JNIEnv *env, jclass cls)
     return (*env)->NewStringUTF(env, buffer);
 }
 
-/* ---- per-instance extras: dictionary set ---------------------------------
- *
- * An ECIHand carries no dictionary set of its own, so the bridge keeps a
- * small mutex-guarded map from handle to extras. nativeDestroy consults it
- * so nothing leaks when a caller destroys without forgetting first.
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeSpeaking
+ * Signature: (J)Z
  */
+JNIEXPORT jboolean JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeSpeaking(JNIEnv *env, jclass cls,
+                                                     jlong handle)
+{
+    (void)env;
+    (void)cls;
+    if (!(ECIHand)(intptr_t)handle)
+        return JNI_FALSE;
+    return eciSpeaking((ECIHand)(intptr_t)handle) ? JNI_TRUE : JNI_FALSE;
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeStop
+ * Signature: (J)V
+ */
+JNIEXPORT void JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStop(JNIEnv *env, jclass cls,
+                                                jlong handle)
+{
+    (void)env;
+    (void)cls;
+    if (!(ECIHand)(intptr_t)handle)
+        return;
+    eciStop((ECIHand)(intptr_t)handle);
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeReset
+ * Signature: (J)V
+ */
+JNIEXPORT void JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeReset(JNIEnv *env, jclass cls,
+                                                 jlong handle)
+{
+    (void)env;
+    (void)cls;
+    if (!(ECIHand)(intptr_t)handle)
+        return;
+    eciReset((ECIHand)(intptr_t)handle);
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeSynchronize
+ * Signature: (J)V
+ */
+JNIEXPORT void JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeSynchronize(JNIEnv *env, jclass cls,
+                                                        jlong handle)
+{
+    (void)env;
+    (void)cls;
+    if (!(ECIHand)(intptr_t)handle)
+        return;
+    eciSynchronize((ECIHand)(intptr_t)handle);
+}
+
+/* ========================================================================
+ * Dictionary Support (Per-Instance Extras)
+ * ======================================================================== */
 
 typedef struct eq_extra {
     ECIHand handle;
@@ -508,8 +638,6 @@ static void eq_extra_release(eq_extra *e)
     int free_now = 0;
     pthread_mutex_lock(&eq_extra_lock);
     if (--e->refs == 0) {
-        /* Only freed here if already unlinked (drop path); otherwise the
-         * list still owns it and refs cannot hit 0 while linked. */
         free_now = 1;
     }
     pthread_mutex_unlock(&eq_extra_lock);
@@ -547,7 +675,6 @@ static int eq_extra_drop(ECIHand h)
                 eq_extras = e->next;
             dict = e->dict;
             e->dict = NULL_DICT_HAND;
-            /* List ownership released; the entry lives until holders release. */
             e->refs--;
             if (e->refs == 0) {
                 pthread_mutex_unlock(&eq_extra_lock);
@@ -581,12 +708,10 @@ static int eq_dict_ensure(ECIHand h, eq_extra *e)
     fresh = eciNewDict(h);
     if (!fresh)
         return 0;
-    /* An error code, so nought is success. */
     if (eciSetDict(h, fresh) != 0) {
         eciDeleteDict(h, fresh);
         return 0;
     }
-    /* Publish under lock; another thread may have won the race. */
     pthread_mutex_lock(&eq_extra_lock);
     if (e->dict) {
         ECIDictHand winner = e->dict;
@@ -721,8 +846,6 @@ Java_com_eloquick_tts_EloQuickEngine_nativeDictForget(JNIEnv *env, jclass cls,
     e = eq_extra_get(h);
     if (!e)
         return;
-    /* Detach atomically under lock; engine calls run after unlock on the
-     * local copy so a concurrent lookup cannot observe a half-cleared set. */
     pthread_mutex_lock(&eq_extra_lock);
     dict = e->dict;
     e->dict = NULL_DICT_HAND;
@@ -777,19 +900,44 @@ Java_com_eloquick_tts_EloQuickEngine_nativeDictLoad(JNIEnv *env, jclass cls,
     return (jint)answer;
 }
 
-/* Heteronym filter: creation-time property, not a live toggle.
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeDictSave
+ * Signature: (JILjava/lang/String;)I
  *
- * hetero_install (src/eci/hetero/eci_hetero.c, via eci_old.c instance setup)
- * is the engine-tested path -- register, load, activate with the filter's
- * own language -- and it reads EVV_HETERO at creation. Rebuilding that
- * sequence post-hoc through the public calls fails (eciNewFilter answers
- * NULL: the manager matches the filter's own language, which the public
- * new call cannot name). So the bridge does what eloquence-revived's
- * per-slot model does at a smaller scale: a process-wide default consulted
- * around eciNewEx. Toggling wants a new instance; off is the default, as
- * upstream insists (a loaded filter turns annotation reading on, so
- * backticks in plain text get interpreted from then on).
+ * Saves the current dictionary volume to a file (binary format).
  */
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeDictSave(JNIEnv *env, jclass cls,
+                                                    jlong handle, jint volume,
+                                                    jstring path)
+{
+    ECIHand h = (ECIHand)(intptr_t)handle;
+    eq_extra *e;
+    ECIDictHand dict;
+    const char *name;
+    int answer;
+    (void)cls;
+    if (!h || !path)
+        return 6;
+    e = eq_extra_get(h);
+    if (!e)
+        return 6;
+    dict = eq_extra_dict_snapshot(e);
+    eq_extra_release(e);
+    if (!dict)
+        return 6;
+    name = (*env)->GetStringUTFChars(env, path, NULL);
+    if (!name)
+        return 2;
+    answer = eciSaveDict(h, dict, (int)volume, name);
+    (*env)->ReleaseStringUTFChars(env, path, name);
+    return (jint)answer;
+}
+
+/* ========================================================================
+ * Heteronym Filter (Creation-Time Property)
+ * ======================================================================== */
 
 static pthread_mutex_t eq_hetero_lock = PTHREAD_MUTEX_INITIALIZER;
 static int eq_hetero_default = 0;
@@ -808,6 +956,23 @@ Java_com_eloquick_tts_EloQuickEngine_nativeSetHeteroDefault(JNIEnv *env, jclass 
     pthread_mutex_lock(&eq_hetero_lock);
     eq_hetero_default = on ? 1 : 0;
     pthread_mutex_unlock(&eq_hetero_lock);
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeGetHeteroDefault
+ * Signature: ()Z
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeGetHeteroDefault(JNIEnv *env, jclass cls)
+{
+    int val;
+    (void)env;
+    (void)cls;
+    pthread_mutex_lock(&eq_hetero_lock);
+    val = eq_hetero_default;
+    pthread_mutex_unlock(&eq_hetero_lock);
+    return val ? JNI_TRUE : JNI_FALSE;
 }
 
 /* eciNewEx with the hetero default in force. Serialized: the env is
@@ -847,20 +1012,12 @@ static ECIHand eq_new_ex_hetero(int language)
     return h;
 }
 
-/* ---- streaming: speak / read / stop -------------------------------------
- *
- * Whole-utterance nativeSynth above holds a long TalkBack stream in memory
- * before any of it is heard and cannot be stopped mid-flight. Streaming
- * hands samples over as they arrive and aborts cleanly, which is what a
- * screen reader needs. Protocol, reimplemented from evvdroid's measured
- * design: a ring between the engine thread and the reader, a worker thread
- * for end detection, aborts answered from the callback.
- */
+/* ========================================================================
+ * Streaming API (Stoppable, Low-Latency)
+ * ======================================================================== */
 
 #define EQ_STREAM_FRAME 1024
 #define EQ_RING_BYTES (128 * 1024)
-/* Milliseconds to watch for the engine taking the work up before the
-   utterance is declared empty. */
 #define EQ_START_SPINS 200
 
 typedef struct {
@@ -1037,8 +1194,6 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamCreate(JNIEnv *env, jclass cls,
     return (jlong)(intptr_t)s;
 }
 
-/* Marks an utterance over that never started, so a reader waiting on the
-   end condition is not left waiting for work nothing handed over. */
 static jboolean eq_stream_finished(eq_stream *s)
 {
     pthread_mutex_lock(&s->lock);
@@ -1074,9 +1229,6 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamSpeak(JNIEnv *env, jclass cls,
     if (!utf8)
         return JNI_FALSE;
     n = strlen(utf8);
-    /* Same input contract as nativeSynth, minus the length cap rationale:
-     * streaming pages through the ring, but a single multi-MB utterance still
-     * pins the text + engine queue; chunk in Java instead. */
     if (n == 0 || n > EQ_MAX_TEXT_BYTES || !eq_utf8_valid(utf8, n)) {
         (*env)->ReleaseStringUTFChars(env, text, utf8);
         return JNI_FALSE;
@@ -1218,9 +1370,6 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamDestroy(JNIEnv *env, jclass cls
     pthread_cond_broadcast(&s->filled);
     pthread_cond_broadcast(&s->work);
     pthread_mutex_unlock(&s->lock);
-    /* The abort flag brings the worker out of the engine: the next buffer
-       offered is answered eciDataAbort and eciSynchronize returns. Nothing
-       is asked of the engine from this thread. */
     if (s->running) {
         pthread_join(s->worker, NULL);
         s->running = 0;
@@ -1236,8 +1385,9 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamDestroy(JNIEnv *env, jclass cls
     free(s);
 }
 
-/* Stream control calls: same engine calls as the whole-utterance path, on
-   the stream's instance. What the TTS service shapes voices and rates with. */
+/* ========================================================================
+ * Stream Control (Voice, Rate, Dictionary)
+ * ======================================================================== */
 
 JNIEXPORT jint JNICALL
 Java_com_eloquick_tts_EloQuickEngine_nativeStreamCopyVoice(JNIEnv *env, jclass cls,
@@ -1300,6 +1450,35 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamSetSampleRateHz(JNIEnv *env, jc
     return (jint)eq_rate_hz[index];
 }
 
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamGetSampleRateHz(JNIEnv *env, jclass cls,
+                                                                  jlong shandle)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    (void)env;
+    (void)cls;
+    if (!s)
+        return 0;
+    int idx = eciGetParam(s->handle, 5 /* P_SAMPLE_RATE */);
+    if (idx < 0 || idx >= EQ_RATES)
+        return 11025;
+    return (jint)eq_rate_hz[idx];
+}
+
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamSetUpsampleMethod(JNIEnv *env, jclass cls,
+                                                                    jlong shandle, jint method)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    (void)env;
+    (void)cls;
+    if (!s)
+        return -1;
+    if (method < 0 || method > 5)
+        return -1;
+    return (jint)eciSetParam(s->handle, 10 /* P_UPSAMPLE_METHOD */, (int)method);
+}
+
 /*
  * Class:     com_eloquick_tts_EloQuickEngine
  * Method:    nativeStreamDictLoad
@@ -1338,4 +1517,350 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamDictLoad(JNIEnv *env, jclass cl
     answer = eciLoadDict(s->handle, dict, (int)volume, name);
     (*env)->ReleaseStringUTFChars(env, path, name);
     return (jint)answer;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamDictSave(JNIEnv *env, jclass cls,
+                                                          jlong shandle, jint volume,
+                                                          jstring path)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    eq_extra *e;
+    ECIDictHand dict;
+    const char *name;
+    int answer;
+    (void)cls;
+    if (!s || !path)
+        return 6;
+    e = eq_extra_get(s->handle);
+    if (!e)
+        return 6;
+    dict = eq_extra_dict_snapshot(e);
+    eq_extra_release(e);
+    if (!dict)
+        return 6;
+    name = (*env)->GetStringUTFChars(env, path, NULL);
+    if (!name)
+        return 2;
+    answer = eciSaveDict(s->handle, dict, (int)volume, name);
+    (*env)->ReleaseStringUTFChars(env, path, name);
+    return (jint)answer;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamDictTeach(JNIEnv *env, jclass cls,
+                                                           jlong shandle, jint volume,
+                                                           jstring key, jstring say)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    eq_extra *e;
+    ECIDictHand dict;
+    const char *k, *s_say;
+    char *pair;
+    size_t kn, sn;
+    int answer;
+    (void)cls;
+    if (!s || !key || !say)
+        return -1;
+    e = eq_extra_get(s->handle);
+    if (!e || !eq_dict_ensure(s->handle, e)) {
+        if (e)
+            eq_extra_release(e);
+        return -1;
+    }
+    dict = eq_extra_dict_snapshot(e);
+    eq_extra_release(e);
+    if (!dict)
+        return -1;
+    k = (*env)->GetStringUTFChars(env, key, NULL);
+    s_say = (*env)->GetStringUTFChars(env, say, NULL);
+    if (!k || !s_say) {
+        if (k)
+            (*env)->ReleaseStringUTFChars(env, key, k);
+        if (s_say)
+            (*env)->ReleaseStringUTFChars(env, say, s_say);
+        return -1;
+    }
+    kn = strlen(k);
+    sn = strlen(s_say);
+    pair = (char *)malloc(kn + sn + 2);
+    if (!pair) {
+        (*env)->ReleaseStringUTFChars(env, key, k);
+        (*env)->ReleaseStringUTFChars(env, say, s_say);
+        return -1;
+    }
+    memcpy(pair, k, kn + 1);
+    memcpy(pair + kn + 1, s_say, sn + 1);
+    answer = eciUpdateDict(s->handle, dict, (int)volume, pair, pair + kn + 1);
+    free(pair);
+    (*env)->ReleaseStringUTFChars(env, key, k);
+    (*env)->ReleaseStringUTFChars(env, say, s_say);
+    return (jint)answer;
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamDictLookup(JNIEnv *env, jclass cls,
+                                                            jlong shandle, jint volume,
+                                                            jstring key)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    eq_extra *e;
+    ECIDictHand dict;
+    const char *k;
+    const char *found;
+    jstring answer;
+    (void)cls;
+    if (!s || !key)
+        return NULL;
+    e = eq_extra_get(s->handle);
+    if (!e)
+        return NULL;
+    dict = eq_extra_dict_snapshot(e);
+    eq_extra_release(e);
+    if (!dict)
+        return NULL;
+    k = (*env)->GetStringUTFChars(env, key, NULL);
+    if (!k)
+        return NULL;
+    found = eciDictLookup(s->handle, dict, (int)volume, k);
+    answer = found ? (*env)->NewStringUTF(env, found) : NULL;
+    (*env)->ReleaseStringUTFChars(env, key, k);
+    return answer;
+}
+
+JNIEXPORT void JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamDictForget(JNIEnv *env, jclass cls,
+                                                            jlong shandle)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    eq_extra *e;
+    ECIDictHand dict;
+    (void)env;
+    (void)cls;
+    if (!s)
+        return;
+    e = eq_extra_get(s->handle);
+    if (!e)
+        return;
+    pthread_mutex_lock(&eq_extra_lock);
+    dict = e->dict;
+    e->dict = NULL_DICT_HAND;
+    pthread_mutex_unlock(&eq_extra_lock);
+    eq_extra_release(e);
+    if (!dict)
+        return;
+    eciSetDict(s->handle, NULL_DICT_HAND);
+    eciDeleteDict(s->handle, dict);
+}
+
+/* ========================================================================
+ * Phoneme Generation
+ * ======================================================================== */
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeGeneratePhonemes
+ * Signature: (JLjava/lang/String;)[B
+ *
+ * Generates phoneme data for the given text. Returns byte array with
+ * phoneme codes, or null on failure.
+ */
+JNIEXPORT jbyteArray JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeGeneratePhonemes(JNIEnv *env, jclass cls,
+                                                             jlong handle, jstring text)
+{
+    ECIHand h = (ECIHand)(intptr_t)handle;
+    const char *utf8 = NULL;
+    jbyteArray out = NULL;
+    char *phonemes = NULL;
+    (void)cls;
+    if (!h || !text)
+        return NULL;
+    utf8 = (*env)->GetStringUTFChars(env, text, NULL);
+    if (!utf8)
+        return NULL;
+    if (!eq_utf8_valid(utf8, strlen(utf8))) {
+        (*env)->ReleaseStringUTFChars(env, text, utf8);
+        return NULL;
+    }
+    if (!eciAddText(h, utf8)) {
+        (*env)->ReleaseStringUTFChars(env, text, utf8);
+        return NULL;
+    }
+    phonemes = eciGeneratePhonemes(h);
+    if (phonemes) {
+        size_t len = strlen(phonemes);
+        out = (*env)->NewByteArray(env, (jsize)len);
+        if (out)
+            (*env)->SetByteArrayRegion(env, out, 0, (jsize)len, (const jbyte *)phonemes);
+        free(phonemes);
+    }
+    (*env)->ReleaseStringUTFChars(env, text, utf8);
+    return out;
+}
+
+/* ========================================================================
+ * Index/Mark Callbacks (for synchronization)
+ * ======================================================================== */
+
+static JavaVM *g_jvm = NULL;
+static jclass g_engine_class = NULL;
+static jmethodID g_index_callback_mid = NULL;
+static jmethodID g_bookmark_callback_mid = NULL;
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeSetIndexCallback
+ * Signature: (J)V
+ *
+ * Enables index callbacks. The Java side must implement:
+ *   void onIndex(int index);
+ */
+JNIEXPORT void JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeSetIndexCallback(JNIEnv *env, jclass cls,
+                                                             jlong handle)
+{
+    (void)env;
+    (void)cls;
+    if (!(ECIHand)(intptr_t)handle)
+        return;
+    (*env)->GetJavaVM(env, &g_jvm);
+    if (!g_engine_class) {
+        jclass local = (*env)->FindClass(env, "com/eloquick/tts/EloQuickEngine");
+        g_engine_class = (jclass)(*env)->NewGlobalRef(env, local);
+        (*env)->DeleteLocalRef(env, local);
+    }
+    if (!g_index_callback_mid) {
+        g_index_callback_mid = (*env)->GetStaticMethodID(env, g_engine_class,
+                                                         "onIndex", "(I)V");
+    }
+    if (!g_bookmark_callback_mid) {
+        g_bookmark_callback_mid = (*env)->GetStaticMethodID(env, g_engine_class,
+                                                            "onBookmark", "(I)V");
+    }
+    eciRegisterCallback((ECIHand)(intptr_t)handle, eq_index_callback, NULL);
+}
+
+static int ECICALL eq_index_callback(ECIHand h, ECIMessage msg, int param, void *data)
+{
+    JNIEnv *env;
+    int need_detach = 0;
+    (void)h;
+    (void)data;
+    if (!g_jvm || !g_engine_class)
+        return eciDataProcessed;
+
+    if ((*g_jvm)->GetEnv(g_jvm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+        if ((*g_jvm)->AttachCurrentThread(g_jvm, &env, NULL) != JNI_OK)
+            return eciDataProcessed;
+        need_detach = 1;
+    }
+
+    if (msg == eciIndexReply && g_index_callback_mid) {
+        (*env)->CallStaticVoidMethod(env, g_engine_class, g_index_callback_mid, param);
+    } else if (msg == eciPhonemeBuffer && g_bookmark_callback_mid) {
+        (*env)->CallStaticVoidMethod(env, g_engine_class, g_bookmark_callback_mid, param);
+    }
+
+    if (need_detach)
+        (*g_jvm)->DetachCurrentThread(g_jvm);
+    return eciDataProcessed;
+}
+
+/* ========================================================================
+ * Audio Format Query
+ * ======================================================================== */
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeGetAudioFormat
+ * Signature: (J)[I
+ *
+ * Returns int array: [sampleRate, channels, bitsPerSample]
+ */
+JNIEXPORT jintArray JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeGetAudioFormat(JNIEnv *env, jclass cls,
+                                                           jlong handle)
+{
+    jintArray out;
+    jint format[3];
+    int rate_idx;
+    (void)cls;
+    if (!(ECIHand)(intptr_t)handle)
+        return NULL;
+    rate_idx = eciGetParam((ECIHand)(intptr_t)handle, 5 /* P_SAMPLE_RATE */);
+    if (rate_idx < 0 || rate_idx >= EQ_RATES)
+        rate_idx = 1;
+    format[0] = eq_rate_hz[rate_idx];
+    format[1] = 1;  // mono
+    format[2] = 16; // 16-bit
+    out = (*env)->NewIntArray(env, 3);
+    if (out)
+        (*env)->SetIntArrayRegion(env, out, 0, 3, format);
+    return out;
+}
+
+/* ========================================================================
+ * Voice Information
+ * ======================================================================== */
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeGetVoiceName
+ * Signature: (JI)Ljava/lang/String;
+ *
+ * Returns the name of a voice preset (1-8), or null.
+ */
+JNIEXPORT jstring JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeGetVoiceName(JNIEnv *env, jclass cls,
+                                                         jlong handle, jint voice)
+{
+    (void)env;
+    (void)cls;
+    if (!(ECIHand)(intptr_t)handle || voice < 1 || voice > 8)
+        return NULL;
+    /* Voice names are fixed in the engine */
+    static const char *voice_names[] = {
+        "Reed", "Bobby", "Grandma", "Grandpa",
+        "Kathy", "Princess", "Huge", "Tiny"
+    };
+    return (*env)->NewStringUTF(env, voice_names[voice - 1]);
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeGetVoiceGender
+ * Signature: (JI)I
+ *
+ * Returns gender: 0=neutral, 1=male, 2=female
+ */
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeGetVoiceGender(JNIEnv *env, jclass cls,
+                                                           jlong handle, jint voice)
+{
+    (void)env;
+    (void)cls;
+    if (!(ECIHand)(intptr_t)handle || voice < 1 || voice > 8)
+        return 0;
+    static const int voice_gender[] = { 1, 1, 2, 1, 2, 2, 1, 1 };
+    return voice_gender[voice - 1];
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeGetVoiceAge
+ * Signature: (JI)I
+ *
+ * Returns approximate age for voice preset.
+ */
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeGetVoiceAge(JNIEnv *env, jclass cls,
+                                                        jlong handle, jint voice)
+{
+    (void)env;
+    (void)cls;
+    if (!(ECIHand)(intptr_t)handle || voice < 1 || voice > 8)
+        return 0;
+    static const int voice_age[] = { 30, 10, 70, 75, 25, 8, 40, 5 };
+    return voice_age[voice - 1];
 }

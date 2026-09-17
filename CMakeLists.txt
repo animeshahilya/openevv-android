@@ -1,125 +1,228 @@
 cmake_minimum_required(VERSION 3.22.1)
-project(eloquick LANGUAGES C)
+project(eloquick LANGUAGES C VERSION 1.0.0 DESCRIPTION "EloQuick: IBM Eloquence / Embedded ViaVoice TTS for Android")
 
-# Set C standard
+# =============================================================================
+# CMake Policy Settings (modern CMake)
+# =============================================================================
+cmake_policy(SET CMP0077 NEW)  # option() honors normal variables
+cmake_policy(SET CMP0091 NEW)  # find_package() caller sets <PackageName>_ROOT
+cmake_policy(SET CMP0135 NEW)  # file(GLOB) with CONFIGURE_DEPENDS
+
+# =============================================================================
+# C Standard Configuration
+# =============================================================================
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
 
-# Default to release optimization (-O3)
+# Default to Release build type
 if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-# Languages bundled into the binaries. Ten, matching upstream: the nine
-# Latin-script modules plus Japanese (jajp, with its romanizer in rom/jajp).
-# Downstream apps trimming APK size can override:
-#   cmake -DOPENEVV_LANGS="enus;dede" ...
-set(OPENEVV_LANGS "enus;dede;engb;eses;esus;frca;frfr;itit;plpl;jajp"
-    CACHE STRING "Language modules bundled into EloQuick binaries")
-option(OPENEVV_BUILD_CLI "Build standalone CLI executables" ON)
+# =============================================================================
+# Configuration Options
+# =============================================================================
+option(OPENEVV_BUILD_CLI "Build standalone CLI executables (eloquick/evv)" ON)
 option(OPENEVV_ENABLE_JNI "Build JNI bridge (android/eloquick_jni.c) into shared libs" ON)
+option(OPENEVV_ENABLE_THIN_LTO "Enable ThinLTO when toolchain supports it" ON)
+option(OPENEVV_ENABLE_ICF "Enable Identical Code Folding (--icf=all) when supported" ON)
+option(OPENEVV_STRIP_RELEASE "Strip release binaries (-Wl,-s)" ON)
+option(OPENEVV_HARDENING "Enable additional hardening flags" ON)
 
-# Compiler flags: -O3 for formant & delta synthesis, hidden visibility,
-# fast-math FP contraction for DSP. -O3 already auto-vectorizes and unrolls
-# where profitable, so no explicit -fvectorize/-funroll-loops (unknown to
-# some NDK Clangs, and pure noise under -w).
-#
-# NOTE: -w applies to the legacy engine objects ONLY (see
-# target_compile_options on eloquick_objs below). The JNI bridge and CLI
-# compile with -Wall -Wextra so new Android code never hides warnings.
-add_compile_options(
-    -O3
-    -fomit-frame-pointer
+# Languages bundled into binaries (semicolon-separated list for CMake)
+set(OPENEVV_LANGS "enus;dede;engb;eses;esus;frca;frfr;itit;plpl;jajp"
+    CACHE STRING "Language modules bundled into EloQuick binaries (semicolon-separated)")
+
+# Android-specific: minimum API level
+if(ANDROID AND NOT ANDROID_NATIVE_API_LEVEL)
+    set(ANDROID_NATIVE_API_LEVEL 26 CACHE STRING "Minimum Android API level")
+endif()
+
+# =============================================================================
+# Platform Detection & Toolchain Setup
+# =============================================================================
+if(ANDROID)
+    # Android NDK build - toolchain file provides compiler
+    set(IS_ANDROID TRUE)
+else()
+    set(IS_ANDROID FALSE)
+    # Host build - detect if cross-compiling for Android manually
+    if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+        set(IS_ANDROID TRUE)
+    endif()
+endif()
+
+# =============================================================================
+# Compiler Flag Management (modern approach with target_compile_options)
+# =============================================================================
+# Base flags for all targets
+set(OPENEVV_BASE_COMPILE_OPTIONS
     -DEVV_ARENA=1
     -DECI_BUILDING=1
     -ffunction-sections
     -fdata-sections
     -fvisibility=hidden
+    -fPIC
     -fno-math-errno
     -fno-trapping-math
     -ffp-contract=fast
-    -fPIC
-    # The engine predates prototypes in places (missing headers and K&R-era
-    # cross-file calls); NDK r28+ Clang errors on those by default. Upstream
-    # builds with the same suppression.
+)
+
+# Engine-specific flags (legacy code, suppress warnings)
+set(OPENEVV_ENGINE_COMPILE_OPTIONS
+    -w
     -Wno-implicit-function-declaration
     -Werror=int-conversion
     -Werror=incompatible-pointer-types
 )
 
-# ThinLTO only when the toolchain accepts it (checked, not assumed).
-include(CheckCCompilerFlag)
-check_c_compiler_flag("-flto=thin" HAVE_THIN_LTO)
-if(HAVE_THIN_LTO)
-    add_compile_options(-flto=thin)
+# Modern code flags (JNI bridge, CLI - keep warnings visible)
+set(OPENEVV_MODERN_COMPILE_OPTIONS
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+    -Wno-missing-field-initializers
+)
+
+# Optimization flags
+if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
+    set(OPENEVV_OPT_COMPILE_OPTIONS -O3 -fomit-frame-pointer)
+elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(OPENEVV_OPT_COMPILE_OPTIONS -O0 -g -DDEBUG=1)
+elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    set(OPENEVV_OPT_COMPILE_OPTIONS -O2 -g -fomit-frame-pointer)
+else()
+    set(OPENEVV_OPT_COMPILE_OPTIONS -O2)
 endif()
 
-# Android 15+ 16KB ELF page size alignment & link optimizations
-if(ANDROID)
-    set(OPENEVV_LINK_OPTS -Wl,--gc-sections)
+# Hardening flags (when enabled)
+if(OPENEVV_HARDENING)
+    set(OPENEVV_HARDENING_COMPILE_OPTIONS
+        -fstack-protector-strong
+        -D_FORTIFY_SOURCE=2
+    )
+    set(OPENEVV_HARDENING_LINK_OPTIONS
+        -Wl,-z,relro,-z,now
+    )
+else()
+    set(OPENEVV_HARDENING_COMPILE_OPTIONS)
+    set(OPENEVV_HARDENING_LINK_OPTIONS)
+endif()
+
+# Combine for engine targets
+set(OPENEVV_ENGINE_ALL_COMPILE_OPTIONS
+    ${OPENEVV_BASE_COMPILE_OPTIONS}
+    ${OPENEVV_ENGINE_COMPILE_OPTIONS}
+    ${OPENEVV_OPT_COMPILE_OPTIONS}
+    ${OPENEVV_HARDENING_COMPILE_OPTIONS}
+)
+
+# Combine for modern targets (JNI, CLI)
+set(OPENEVV_MODERN_ALL_COMPILE_OPTIONS
+    ${OPENEVV_BASE_COMPILE_OPTIONS}
+    ${OPENEVV_MODERN_COMPILE_OPTIONS}
+    ${OPENEVV_OPT_COMPILE_OPTIONS}
+    ${OPENEVV_HARDENING_COMPILE_OPTIONS}
+)
+
+# =============================================================================
+# Linker Flag Management
+# =============================================================================
+set(OPENEVV_BASE_LINK_OPTIONS
+    -Wl,--gc-sections
+    ${OPENEVV_HARDENING_LINK_OPTIONS}
+)
+
+if(IS_ANDROID)
+    # Android 15+ 16KB ELF page size alignment
+    set(OPENEVV_ANDROID_LINK_OPTS
+        -Wl,-z,max-page-size=16384
+        -Wl,-z,common-page-size=16384
+    )
+
+    # Check for ICF support
+    if(OPENEVV_ENABLE_ICF)
+        include(CheckLinkerFlag)
+        check_linker_flag(C "-Wl,--icf=all" HAVE_ICF_ALL)
+        if(HAVE_ICF_ALL)
+            list(APPEND OPENEVV_ANDROID_LINK_OPTS -Wl,--icf=all -Wl,-O3)
+        endif()
+    endif()
+
+    list(APPEND OPENEVV_BASE_LINK_OPTIONS ${OPENEVV_ANDROID_LINK_OPTS})
+endif()
+
+# ThinLTO (probe at configure time)
+if(OPENEVV_ENABLE_THIN_LTO AND NOT IS_ANDROID)
+    include(CheckCCompilerFlag)
+    check_c_compiler_flag("-flto=thin" HAVE_THIN_LTO)
     if(HAVE_THIN_LTO)
-        list(APPEND OPENEVV_LINK_OPTS -flto=thin)
+        list(APPEND OPENEVV_BASE_COMPILE_OPTIONS -flto=thin)
+        list(APPEND OPENEVV_BASE_LINK_OPTIONS -flto=thin)
     endif()
-    # ld supports these on NDK r26+; guarded so host builds never inherit them.
-    include(CheckLinkerFlag)
-    check_linker_flag(C "-Wl,-z,max-page-size=16384" HAVE_MAX_PAGE)
-    check_linker_flag(C "-Wl,-z,common-page-size=16384" HAVE_COMMON_PAGE)
-    check_linker_flag(C "-Wl,--icf=all" HAVE_ICF_ALL)
-    if(HAVE_MAX_PAGE)
-        list(APPEND OPENEVV_LINK_OPTS -Wl,-z,max-page-size=16384)
+elseif(OPENEVV_ENABLE_THIN_LTO AND IS_ANDROID)
+    # On Android, defer to build_android.py which probes at build time
+    # CMake will add -flto=thin if toolchain supports it via add_link_options
+    include(CheckCCompilerFlag)
+    check_c_compiler_flag("-flto=thin" HAVE_THIN_LTO)
+    if(HAVE_THIN_LTO)
+        list(APPEND OPENEVV_BASE_COMPILE_OPTIONS -flto=thin)
+        list(APPEND OPENEVV_BASE_LINK_OPTIONS -flto=thin)
     endif()
-    if(HAVE_COMMON_PAGE)
-        list(APPEND OPENEVV_LINK_OPTS -Wl,-z,common-page-size=16384)
-    endif()
-    if(HAVE_ICF_ALL)
-        list(APPEND OPENEVV_LINK_OPTS -Wl,--icf=all -Wl,-O3)
-    endif()
-    add_link_options(${OPENEVV_LINK_OPTS})
 endif()
 
-# Include directories
-set(OPENEVV_INCLUDE_DIRS
+# Strip release binaries
+if(OPENEVV_STRIP_RELEASE AND CMAKE_BUILD_TYPE STREQUAL "Release")
+    list(APPEND OPENEVV_BASE_LINK_OPTIONS -Wl,-s)
+endif()
+
+# =============================================================================
+# Include Directories
+# =============================================================================
+set(OPENEVV_CORE_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_BINARY_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-# Collect core engine C sources (POSIX port; Win32 port excluded).
-# CONFIGURE_DEPENDS so new src/*.c files are picked up without a manual
-# re-configure (lesson from beyondsighttech/openevv stale-object segfault:
-# the build must never silently miss a file).
-file(GLOB_RECURSE OPENEVV_SRC_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
+# =============================================================================
+# Source Collection
+# =============================================================================
+# Core engine sources (excluding Win32 port)
+file(GLOB_RECURSE OPENEVV_SRC_FILES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c"
+)
 list(FILTER OPENEVV_SRC_FILES EXCLUDE REGEX ".*/port_win32\\.c$")
 
-# Collect language sources
+# Language sources
 set(OPENEVV_LANG_FILES "")
+set(OPENEVV_LANG_INCLUDE_DIRS "")
 foreach(LANG ${OPENEVV_LANGS})
     set(LANG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lang/${LANG}")
     if(NOT EXISTS "${LANG_DIR}")
         message(FATAL_ERROR "Language directory missing: ${LANG_DIR}")
     endif()
-    list(APPEND OPENEVV_INCLUDE_DIRS "${LANG_DIR}")
+    list(APPEND OPENEVV_LANG_INCLUDE_DIRS "${LANG_DIR}")
     file(GLOB LANG_SOURCES CONFIGURE_DEPENDS "${LANG_DIR}/*.c")
+    # Exclude generated delta_rules_c*.c files (built from bytecode)
     list(FILTER LANG_SOURCES EXCLUDE REGEX ".*/delta_rules_c.*\\.c$")
     list(APPEND OPENEVV_LANG_FILES ${LANG_SOURCES})
 endforeach()
 
-# Japanese romanizer (rom/jajp/): required when jajp is bundled. Upstream
-# builds it with -DEVV_ROM_JAJP; without it the module links but cannot
-# turn kana/kanji input into something the engine can speak.
+# Japanese romanizer
 set(OPENEVV_ROM_FILES "")
-set(OPENEVV_ROM_DEFS "")
+set(OPENEVV_ROM_INCLUDE_DIRS "")
+set(OPENEVV_ROM_DEFINITIONS "")
 if("jajp" IN_LIST OPENEVV_LANGS)
     file(GLOB OPENEVV_ROM_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/rom/jajp/*.c")
-    list(APPEND OPENEVV_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/rom/jajp")
-    set(OPENEVV_ROM_DEFS -DEVV_ROM_JAJP)
+    list(APPEND OPENEVV_ROM_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/rom/jajp")
+    set(OPENEVV_ROM_DEFINITIONS -DEVV_ROM_JAJP)
 endif()
 
-# Generate delta_langs.c listing bound languages.
-# NOTE (learned from Eagalon/openevv SAPI fix): delta_languages[] carries 0
-# for each language until delta_lang_bind_all() runs, so every consumer must
-# bind before reading the registry -- the CLI does, and android/eloquick_jni.c
-# does. Do not read the table from outside without binding first.
+# =============================================================================
+# Generated Sources: delta_langs.c
+# =============================================================================
 set(DELTA_LANGS_C "${CMAKE_CURRENT_BINARY_DIR}/delta_langs.c")
 file(WRITE "${DELTA_LANGS_C}" "/* Generated by CMake */\n#include \"delta_lang.h\"\n\n")
 foreach(LANG ${OPENEVV_LANGS})
@@ -139,91 +242,203 @@ file(APPEND "${DELTA_LANGS_C}" "}\n")
 
 list(APPEND OPENEVV_LANG_FILES "${DELTA_LANGS_C}")
 
-# JNI bridge sources (needs <jni.h>; skipped automatically without it, and
-# never on Windows -- the bridge is POSIX (pthreads) for Android targets).
+# =============================================================================
+# JNI Bridge Sources
+# =============================================================================
 set(OPENEVV_JNI_FILES "")
+set(OPENEVV_JNI_DEFINITIONS "")
 if(OPENEVV_ENABLE_JNI AND NOT WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/android/eloquick_jni.c")
-    find_package(JNI QUIET)
-    if(JNI_FOUND)
+    if(IS_ANDROID)
+        # On Android, JNI headers come from the NDK toolchain
         set(OPENEVV_JNI_FILES "${CMAKE_CURRENT_SOURCE_DIR}/android/eloquick_jni.c")
     else()
-        message(STATUS "JNI not found; building shared libs without android/eloquick_jni.c")
+        # Host build: try to find JNI via find_package
+        find_package(JNI QUIET)
+        if(JNI_FOUND)
+            set(OPENEVV_JNI_FILES "${CMAKE_CURRENT_SOURCE_DIR}/android/eloquick_jni.c")
+            set(OPENEVV_JNI_DEFINITIONS -DJNI_AVAILABLE)
+        else()
+            message(STATUS "JNI not found; building shared libs without android/eloquick_jni.c")
+        endif()
     endif()
 endif()
 
-# Compile the engine ONCE as an object library; every binary below links the
-# same objects. Previously each of the 4 targets recompiled all ~200 sources,
-# i.e. ~4x build time and ~4x ThinLTO memory.
+# =============================================================================
+# Object Library (compile engine once, link many times)
+# =============================================================================
 add_library(eloquick_objs OBJECT
     ${OPENEVV_SRC_FILES}
     ${OPENEVV_LANG_FILES}
     ${OPENEVV_ROM_FILES}
 )
-target_include_directories(eloquick_objs PUBLIC ${OPENEVV_INCLUDE_DIRS})
-# Legacy engine sources predate -Wall cleanliness: silence warnings there
-# only, so new code (JNI/CLI) still surfaces them.
-target_compile_options(eloquick_objs PRIVATE -w)
-if(OPENEVV_ROM_DEFS)
-    target_compile_definitions(eloquick_objs PUBLIC ${OPENEVV_ROM_DEFS})
+
+target_include_directories(eloquick_objs PUBLIC
+    ${OPENEVV_CORE_INCLUDE_DIRS}
+    ${OPENEVV_LANG_INCLUDE_DIRS}
+    ${OPENEVV_ROM_INCLUDE_DIRS}
+)
+
+target_compile_options(eloquick_objs PRIVATE ${OPENEVV_ENGINE_ALL_COMPILE_OPTIONS})
+
+if(OPENEVV_ROM_DEFINITIONS)
+    target_compile_definitions(eloquick_objs PUBLIC ${OPENEVV_ROM_DEFINITIONS})
 endif()
 
-# JNI bridge compiles warning-clean: it is new code, not transcribed engine.
+# Apply modern compile options to JNI bridge source specifically
 if(OPENEVV_JNI_FILES)
-    set_source_files_properties(${OPENEVV_JNI_FILES} PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Wno-unused-parameter")
+    set_source_files_properties(${OPENEVV_JNI_FILES}
+        PROPERTIES COMPILE_OPTIONS "${OPENEVV_MODERN_ALL_COMPILE_OPTIONS}"
+    )
 endif()
 
-# 1. Primary shared library (libeloquick.so): the ONLY library carrying the
-# JNI bridge. Load exactly one .so per process -- loading both libeloquick.so
-# and libopenevv.so duplicates the native method implementations (both used
-# to embed eloquick_jni.c) and wastes a full engine copy in RAM.
-# Java side: System.loadLibrary("eloquick"). See docs/android.md.
+# =============================================================================
+# Shared Library: libeloquick.so (primary, with JNI bridge)
+# =============================================================================
 add_library(eloquick SHARED
     $<TARGET_OBJECTS:eloquick_objs>
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/eci_api.c
     ${OPENEVV_JNI_FILES}
 )
-target_include_directories(eloquick PUBLIC ${OPENEVV_INCLUDE_DIRS})
-if(OPENEVV_ROM_DEFS)
-    target_compile_definitions(eloquick PUBLIC ${OPENEVV_ROM_DEFS})
-endif()
-target_link_libraries(eloquick m pthread)
-set_target_properties(eloquick PROPERTIES OUTPUT_NAME "eloquick")
 
-# Compatibility shared library (libopenevv.so): same objects, own SONAME,
-# pure ECI API with NO JNI bridge (avoids duplicate native symbols when both
-# .so files sit in one APK; the app loads libeloquick.so for JNI).
+target_include_directories(eloquick PUBLIC
+    ${OPENEVV_CORE_INCLUDE_DIRS}
+    ${OPENEVV_LANG_INCLUDE_DIRS}
+    ${OPENEVV_ROM_INCLUDE_DIRS}
+)
+
+target_link_libraries(eloquick PUBLIC m pthread)
+
+if(OPENEVV_ROM_DEFINITIONS)
+    target_compile_definitions(eloquick PUBLIC ${OPENEVV_ROM_DEFINITIONS})
+endif()
+if(OPENEVV_JNI_DEFINITIONS)
+    target_compile_definitions(eloquick PUBLIC ${OPENEVV_JNI_DEFINITIONS})
+endif()
+
+target_link_options(eloquick PRIVATE ${OPENEVV_BASE_LINK_OPTIONS})
+set_target_properties(eloquick PROPERTIES
+    OUTPUT_NAME "eloquick"
+    SOVERSION 1
+    VERSION ${PROJECT_VERSION}
+    ANDROID_SO_UNDEFINED OFF  # Allow undefined symbols on Android (resolved at runtime)
+)
+
+# =============================================================================
+# Shared Library: libopenevv.so (compatibility, no JNI)
+# =============================================================================
 add_library(openevv SHARED
     $<TARGET_OBJECTS:eloquick_objs>
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/eci_api.c
 )
-target_include_directories(openevv PUBLIC ${OPENEVV_INCLUDE_DIRS})
-if(OPENEVV_ROM_DEFS)
-    target_compile_definitions(openevv PUBLIC ${OPENEVV_ROM_DEFS})
-endif()
-target_link_libraries(openevv m pthread)
-set_target_properties(openevv PROPERTIES OUTPUT_NAME "openevv")
 
-# 2. Standalone CLI: link once as `eloquick`, then copy to `evv`.
-# The program is argv[0]-aware, so a copy is behaviour-identical and saves a
-# second full link (and previously a second full compile).
+target_include_directories(openevv PUBLIC
+    ${OPENEVV_CORE_INCLUDE_DIRS}
+    ${OPENEVV_LANG_INCLUDE_DIRS}
+    ${OPENEVV_ROM_INCLUDE_DIRS}
+)
+
+target_link_libraries(openevv PUBLIC m pthread)
+
+if(OPENEVV_ROM_DEFINITIONS)
+    target_compile_definitions(openevv PUBLIC ${OPENEVV_ROM_DEFINITIONS})
+endif()
+
+target_link_options(openevv PRIVATE ${OPENEVV_BASE_LINK_OPTIONS})
+set_target_properties(openevv PROPERTIES
+    OUTPUT_NAME "openevv"
+    SOVERSION 1
+    VERSION ${PROJECT_VERSION}
+    ANDROID_SO_UNDEFINED OFF
+)
+
+# =============================================================================
+# CLI Executable: eloquick (and evv copy)
+# =============================================================================
 if(OPENEVV_BUILD_CLI)
     add_executable(eloquick_cli
         $<TARGET_OBJECTS:eloquick_objs>
         ${CMAKE_CURRENT_SOURCE_DIR}/cli/evv.c
     )
-    target_include_directories(eloquick_cli PRIVATE ${OPENEVV_INCLUDE_DIRS})
-    if(OPENEVV_ROM_DEFS)
-        target_compile_definitions(eloquick_cli PRIVATE ${OPENEVV_ROM_DEFS})
-    endif()
-    target_link_libraries(eloquick_cli m pthread)
-    set_target_properties(eloquick_cli PROPERTIES OUTPUT_NAME "eloquick")
-    if(ANDROID)
-        set_target_properties(eloquick_cli PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
+
+    target_include_directories(eloquick_cli PRIVATE
+        ${OPENEVV_CORE_INCLUDE_DIRS}
+        ${OPENEVV_LANG_INCLUDE_DIRS}
+        ${OPENEVV_ROM_INCLUDE_DIRS}
+    )
+
+    target_link_libraries(eloquick_cli PRIVATE m pthread)
+
+    if(OPENEVV_ROM_DEFINITIONS)
+        target_compile_definitions(eloquick_cli PRIVATE ${OPENEVV_ROM_DEFINITIONS})
     endif()
 
+    target_compile_options(eloquick_cli PRIVATE ${OPENEVV_MODERN_ALL_COMPILE_OPTIONS})
+    target_link_options(eloquick_cli PRIVATE ${OPENEVV_BASE_LINK_OPTIONS})
+
+    if(IS_ANDROID)
+        set_target_properties(eloquick_cli PROPERTIES
+            POSITION_INDEPENDENT_CODE TRUE
+        )
+    endif()
+
+    set_target_properties(eloquick_cli PROPERTIES
+        OUTPUT_NAME "eloquick"
+    )
+
+    # Mirror as 'evv' (argv[0]-aware compat binary)
     add_custom_command(TARGET eloquick_cli POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:eloquick_cli> $<TARGET_FILE_DIR:eloquick_cli>/evv${CMAKE_EXECUTABLE_SUFFIX}
+            $<TARGET_FILE:eloquick_cli>
+            $<TARGET_FILE_DIR:eloquick_cli>/evv${CMAKE_EXECUTABLE_SUFFIX}
         COMMENT "Mirroring eloquick CLI as evv (argv[0]-aware compat binary)"
     )
 endif()
+
+# =============================================================================
+# Installation
+# =============================================================================
+install(TARGETS eloquick openevv
+    LIBRARY DESTINATION lib
+    RUNTIME DESTINATION bin
+)
+
+if(OPENEVV_BUILD_CLI)
+    install(TARGETS eloquick_cli
+        RUNTIME DESTINATION bin
+    )
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/evv${CMAKE_EXECUTABLE_SUFFIX}
+        DESTINATION bin
+        RENAME evv${CMAKE_EXECUTABLE_SUFFIX}
+    )
+endif()
+
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/eci.h
+    DESTINATION include
+)
+
+# =============================================================================
+# Testing Support (if enabled)
+# =============================================================================
+option(OPENEVV_BUILD_TESTS "Build test executables" OFF)
+if(OPENEVV_BUILD_TESTS)
+    enable_testing()
+    # Add test targets here if needed
+endif()
+
+# =============================================================================
+# Summary Output
+# =============================================================================
+message(STATUS "============================================")
+message(STATUS "EloQuick Configuration Summary")
+message(STATUS "============================================")
+message(STATUS "  Version:           ${PROJECT_VERSION}")
+message(STATUS "  Build Type:        ${CMAKE_BUILD_TYPE}")
+message(STATUS "  Android Build:     ${IS_ANDROID}")
+message(STATUS "  Languages:         ${OPENEVV_LANGS}")
+message(STATUS "  Build CLI:         ${OPENEVV_BUILD_CLI}")
+message(STATUS "  Enable JNI:        ${OPENEVV_ENABLE_JNI}")
+message(STATUS "  ThinLTO:           ${OPENEVV_ENABLE_THIN_LTO} (detected: ${HAVE_THIN_LTO})")
+message(STATUS "  ICF:               ${OPENEVV_ENABLE_ICF} (detected: ${HAVE_ICF_ALL})")
+message(STATUS "  Strip Release:     ${OPENEVV_STRIP_RELEASE}")
+message(STATUS "  Hardening:         ${OPENEVV_HARDENING}")
+message(STATUS "============================================")
