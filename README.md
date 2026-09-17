@@ -17,7 +17,7 @@ This fork is **Android-only**. The blessed build paths are:
 - `CMakeLists.txt` — Modern CMake for Gradle/CMake integration
 - `android/` — JNI bridge, Kotlin bindings, and example app
 
-The inherited desktop tree (`Makefile`, `win/`, `speechd/`, `nvda/`, `reference/`, desktop docs) stays for provenance and upstream merges; it is **not built, tested, or supported** here.
+**Desktop artifacts removed** — Windows (`win/`), Speech Dispatcher (`speechd/`), NVDA addon (`nvda/`), reference build (`reference/`), desktop test suite (`test/`), desktop Makefile, and desktop-only docs have been deleted to keep this fork lean. Git history preserves them for provenance. Upstream merges use `git fetch upstream && git merge`.
 
 ---
 
@@ -295,23 +295,12 @@ OPENEVV_EVV=$PREFIX/bin/evv openevv-say -s 60 "Hello from OpenEVV."
 
 ---
 
-## Upstream Desktop Reference (Not Supported Here)
-
-Desktop build, Speech Dispatcher module, Windows `eci.dll`/`evvspeak.exe`, SSML, and the 979-case `test/matrix.sh` gate live upstream. See:
-- `docs/building.md` — Build system details
-- `docs/testing.md` — Test suite (979 cases, 20k words)
-- `docs/windows.md` — Windows build
-- `docs/speech-dispatcher.md` — Linux Speech Dispatcher module
-
----
-
 ## Contributing
 
 1. Fork & create a feature branch
 2. Run `python tools/build_android.py --abi all --clean` to verify builds
 3. Run `python tools/test_device.py --abi arm64-v8a` if you have a device
-4. Ensure `make matrix` passes upstream (if changing engine code)
-5. Submit PR with clear description of changes
+4. Submit PR with clear description of changes
 
 ---
 
