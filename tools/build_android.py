@@ -293,7 +293,7 @@ def linker_accepts(clang: Path, flag: str, target_flag: Optional[List[str]] = No
                 pass
 
 
-def collect_sources(langs: List[str]) -> Tuple[List[Path], List[Path], List[Path], List[Path], List[Path]]:
+def collect_sources(langs: List[str]) -> Tuple[List[Path], List[Path], List[Path], List[Path], List[Path], List[str]]:
     """Collect all source files and include directories."""
     # Core engine sources
     src_files = []
@@ -336,7 +336,7 @@ def collect_sources(langs: List[str]) -> Tuple[List[Path], List[Path], List[Path
         # We'll check for jni.h availability later when we have the NDK root
         jni_files.append(jni_c)
 
-    return src_files, lang_files, rom_files, jni_files, src_dirs + lang_dirs + rom_dirs
+    return src_files, lang_files, rom_files, jni_files, src_dirs + lang_dirs + rom_dirs, rom_defs
 
 
 def generate_delta_langs_c(build_dir: Path, langs: List[str]) -> Path:
@@ -480,7 +480,7 @@ def build_abi(
     langs_c_mtime = langs_c.stat().st_mtime
 
     # Collect sources
-    src_files, lang_files, rom_files, jni_files, include_dirs = collect_sources(langs)
+    src_files, lang_files, rom_files, jni_files, include_dirs, rom_defs = collect_sources(langs)
 
     # Check for JNI header availability
     jni_h_found = False
@@ -534,7 +534,7 @@ def build_abi(
         "-fdata-sections",
         "-fvisibility=hidden",
         "-fPIC",
-    ] + opt_cflags + inc_flags
+    ] + opt_cflags + inc_flags + rom_defs
 
     header_floor = newest_header_mtime()
 
@@ -551,7 +551,7 @@ def build_abi(
 
     jni_set = {p.resolve() for p in jni_files + [ROOT / "cli" / "evv.c", ROOT / "lib" / "eci_api.c"]}
 
-    core_sources = src_files + lang_files + rom_files
+    core_sources = src_files + lang_files + rom_files + [langs_c]
     print(f"Compiling {len(core_sources)} core sources [{'DEBUG' if debug else '-O3 release'}{lto_tag if not debug else ''}]...")
 
     workers = jobs or os.cpu_count() or 8

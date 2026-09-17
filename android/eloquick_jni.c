@@ -1672,7 +1672,6 @@ Java_com_eloquick_tts_EloQuickEngine_nativeGeneratePhonemes(JNIEnv *env, jclass 
     ECIHand h = (ECIHand)(intptr_t)handle;
     const char *utf8 = NULL;
     jbyteArray out = NULL;
-    char *phonemes = NULL;
     (void)cls;
     if (!h || !text)
         return NULL;
@@ -1687,13 +1686,13 @@ Java_com_eloquick_tts_EloQuickEngine_nativeGeneratePhonemes(JNIEnv *env, jclass 
         (*env)->ReleaseStringUTFChars(env, text, utf8);
         return NULL;
     }
-    phonemes = eciGeneratePhonemes(h);
-    if (phonemes) {
-        size_t len = strlen(phonemes);
+    /* eciGeneratePhonemes needs a buffer; allocate a reasonable size */
+    char phoneme_buf[4096];
+    if (eciGeneratePhonemes(h, (int)sizeof(phoneme_buf), phoneme_buf) > 0) {
+        size_t len = strlen(phoneme_buf);
         out = (*env)->NewByteArray(env, (jsize)len);
         if (out)
-            (*env)->SetByteArrayRegion(env, out, 0, (jsize)len, (const jbyte *)phonemes);
-        free(phonemes);
+            (*env)->SetByteArrayRegion(env, out, 0, (jsize)len, (const jbyte *)phoneme_buf);
     }
     (*env)->ReleaseStringUTFChars(env, text, utf8);
     return out;
@@ -1702,6 +1701,8 @@ Java_com_eloquick_tts_EloQuickEngine_nativeGeneratePhonemes(JNIEnv *env, jclass 
 /* ========================================================================
  * Index/Mark Callbacks (for synchronization)
  * ======================================================================== */
+
+static int ECICALL eq_index_callback(ECIHand h, ECIMessage msg, int param, void *data);
 
 static JavaVM *g_jvm = NULL;
 static jclass g_engine_class = NULL;
