@@ -1,0 +1,226 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingBottom="@dimen/spacing_medium">
+
+    <TextView
+        android:id="@+id/sectionReadingHeader"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/section_header_margin_top"
+        android:layout_marginBottom="@dimen/section_header_margin_bottom"
+        android:text="@string/section_reading"
+        android:textAppearance="?attr/textAppearanceHeadlineSmall"
+        android:textColor="?attr/colorPrimary" />
+
+    <!-- Checkboxes -->
+    <com.google.android.material.checkbox.MaterialCheckBox
+        android:id="@+id/checkHetero"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="@dimen/spacing_small"
+        android:text="@string/checkbox_hetero" />
+
+    <com.google.android.material.checkbox.MaterialCheckBox
+        android:id="@+id/checkWednesday"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="@dimen/spacing_small"
+        android:text="@string/checkbox_wednesday" />
+
+    <com.google.android.material.checkbox.MaterialCheckBox
+        android:id="@+id/checkOptimizer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="@dimen/spacing_small"
+        android:text="@string/checkbox_optimizer" />
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/optimizerProfileLayout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/spacing_small"
+        android:layout_marginBottom="@dimen/spacing_medium"
+        android:hint="@string/label_optimizer_profile"
+        app:startIconDrawable="@drawable/ic_baseline_tune_24">
+
+        <AutoCompleteTextView
+            android:id="@+id/optimizerProfileSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="none"
+            android:focusable="false"
+            android:clickable="true"
+            android:contentDescription="@string/desc_optimizer_profile" />
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <com.google.android.material.checkbox.MaterialCheckBox
+        android:id="@+id/checkUnicodeNorm"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="@dimen/spacing_small"
+        android:text="@string/checkbox_unicode_norm" />
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/emojiLayout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/spacing_small"
+        android:layout_marginBottom="@dimen/spacing_medium"
+        android:hint="@string/label_emoji"
+        app:startIconDrawable="@drawable/ic_baseline_emoji_emotions_24">
+
+        <AutoCompleteTextView
+            android:id="@+id/emojiSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="none"
+            android:focusable="false"
+            android:clickable="true"
+            android:contentDescription="@string/desc_emoji_spinner" />
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/digitGroupingLayout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/spacing_small"
+        android:layout_marginBottom="@dimen/spacing_medium"
+        android:hint="@string/label_digit_grouping"
+        app:startIconDrawable="@drawable/ic_baseline_123_24">
+
+        <AutoCompleteTextView
+            android:id="@+id/digitGroupingSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="none"
+            android:focusable="false"
+            android:clickable="true"
+            android:contentDescription="@string/desc_digit_spinner" />
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <com.google.android.material.checkbox.MaterialCheckBox
+        android:id="@+id/checkCurrency"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="@dimen/spacing_small"
+        android:text="@string/checkbox_currency" />
+
+    <com.google.android.material.checkbox.MaterialCheckBox
+        android:id="@+id/checkTimeDate"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="@dimen/spacing_small"
+        android:text="@string/checkbox_time_date" />
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/readingModeLayout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/spacing_small"
+        android:layout_marginBottom="@dimen/spacing_medium"
+        android:hint="@string/label_reading_mode"
+        app:startIconDrawable="@drawable/ic_baseline_menu_book_24">
+
+        <AutoCompleteTextView
+            android:id="@+id/readingModeSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="none"
+            android:focusable="false"
+            android:clickable="true"
+            android:contentDescription="@string/desc_reading_mode_spinner" />
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <com.google.android.material.checkbox.MaterialCheckBox
+        android:id="@+id/checkProgSymbols"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="@dimen/spacing_small"
+        android:text="@string/checkbox_prog_symbols" />
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/punctuationLayout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/spacing_small"
+        android:layout_marginBottom="@dimen/spacing_medium"
+        android:hint="@string/label_punctuation"
+        app:startIconDrawable="@drawable/ic_baseline_format_quote_24">
+
+        <AutoCompleteTextView
+            android:id="@+id/punctuationSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="none"
+            android:focusable="false"
+            android:clickable="true"
+            android:contentDescription="@string/desc_punct_spinner" />
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/customPunctuationLayout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/spacing_small"
+        android:layout_marginBottom="@dimen/spacing_medium"
+        android:hint="@string/label_custom_punctuation"
+        app:startIconDrawable="@drawable/ic_baseline_edit_24">
+
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/customPunctuationInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <com.google.android.material.checkbox.MaterialCheckBox
+        android:id="@+id/checkForceRate"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="@dimen/spacing_small"
+        android:text="@string/checkbox_force_rate" />
+
+    <com.google.android.material.checkbox.MaterialCheckBox
+        android:id="@+id/checkForcePitch"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="@dimen/spacing_small"
+        android:text="@string/checkbox_force_pitch" />
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/pausesLayout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/spacing_small"
+        android:layout_marginBottom="@dimen/spacing_medium"
+        android:hint="@string/label_pauses"
+        app:startIconDrawable="@drawable/ic_baseline_pause_24">
+
+        <AutoCompleteTextView
+            android:id="@+id/pausesSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="none"
+            android:focusable="false"
+            android:clickable="true"
+            android:contentDescription="@string/desc_pause_spinner" />
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <com.google.android.material.checkbox.MaterialCheckBox
+        android:id="@+id/checkPhrasePrediction"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="@dimen/spacing_small"
+        android:text="@string/checkbox_phrase_prediction" />
+
+    <com.google.android.material.checkbox.MaterialCheckBox
+        android:id="@+id/checkQuietPunct"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="@dimen/spacing_small"
+        android:text="@string/checkbox_quiet_punct" />
+
+</LinearLayout>
