@@ -60,9 +60,206 @@
 #define LOGE(...) fprintf(stderr, "E: " __VA_ARGS__)
 #endif
 
+/* ---- Constants shared with eloquick_jni.c ------------------------------- */
+
+#define EQ_FRAME 2048
+#define EQ_INDEX_QUEUE 16
+#define EQ_MAX_TEXT_BYTES (64 * 1024)
+#define EQ_FRAME 2048
+#define EVN_MAX_TEXT_BYTES (64 * 1024)
+#define EVN_FRAME 2048
+#define EVN_DRAIN_SPINS 3000
+#define EVN_DRAIN_SLEEP_US (10 * 1000)
+#define EVN_MAX_SLOTS 8
+#define EVN_MAX_DICT_PATH 512
+
+/* ---- Type definitions shared with eloquick_jni.c ---------------------- */
+
+typedef struct {
+    ECIHand handle;
+    pthread_mutex_t lock;
+    pthread_cond_t room;
+    pthread_cond_t filled;
+    pthread_cond_t work;
+    unsigned char *ring;
+    size_t head;
+    size_t tail;
+    size_t count;
+    int aborted;
+    int started;
+    int done;
+    int pending;
+    int busy;
+    int quitting;
+    int running;
+    unsigned char *text;
+    short frame[EQ_FRAME];
+    pthread_t worker;
+
+    /* Index marks (eciInsertIndex): values the app handed in with its text
+       (byte/char offsets of its own choosing -- the engine never reads
+       them, it just reports back the ones it has passed). Queued here for
+       the reader to drain between reads; guarded by lock. The session's
+       one-utterance-at-a-time contract keeps the small fixed queue safe. */
+    int want_indices;        /* session created for mark tracking */
+    int indices_enabled;     /* marks expected this utterance */
+    int mark_queue[EQ_INDEX_QUEUE];
+    int mark_count;
+
+    /* prosody / pacing / pause / dict (evvdroid-style) */
+    int pause_mode;          /* 0=keep 1=end-only 2=all */
+    int phrase_prediction;
+    int abbreviations;
+    int speed;               /* override for paced synthesis */
+    int pitch;
+    int lead_ms;             /* ms of audio to keep ahead (default 300) */
+    int64_t last_speak_ms;   /* timestamp of last speak call */
+    /* dictionary: up to 8 loaded paths */
+    #define EQ_MAX_DICTS 8
+    char *dict_paths[EQ_MAX_DICTS];
+    int   dict_count;
+} eq_stream;
+
+typedef struct {
+    ECIHand handle;
+    ECIDictHand dict;
+    int refs; /* guarded by eq_extra_lock; entry freed when refs==0 after unlink */
+    struct eq_extra *next;
+} eq_extra;
+
 /* Port lifecycle (XREF src/port/evv_port.h). */
 void evv_port_start(void);
 void evvRunStaticInitialisers(void);
+
+/* ---- eq_extra management (shared with eloquick_jni.c) ----------------- */
+
+static pthread_mutex_t eq_extra_lock = PTHREAD_MUTEX_INITIALIZER;
+static eq_extra *eq_extras = NULL;
+
+static eq_extra *eq_extra_find_locked(ECIHand h)
+{
+    eq_extra *e = eq_extras;
+    while (e) {
+        if (e->handle == h)
+            return e;
+        e = e->next;
+    }
+    return NULL;
+}
+
+/* Acquire a reference: safe to use after unlock until eq_extra_release. */
+static eq_extra *eq_extra_get(ECIHand h)
+{
+    eq_extra *e;
+    pthread_mutex_lock(&eq_extra_lock);
+    e = eq_extra_find_locked(h);
+    if (!e) {
+        e = (eq_extra *)calloc(1, sizeof(*e));
+        if (e) {
+            e->handle = h;
+            e->refs = 1;
+            e->next = eq_extras;
+            eq_extras = e;
+        }
+    } else {
+        e->refs++;
+    }
+    pthread_mutex_unlock(&eq_extra_lock);
+    return e;
+}
+
+static void eq_extra_release(eq_extra *e)
+{
+    int free_now = 0;
+    pthread_mutex_lock(&eq_extra_lock);
+    if (--e->refs == 0) {
+        free_now = 1;
+    }
+    pthread_mutex_unlock(&eq_extra_lock);
+    if (free_now)
+        free(e);
+}
+
+/* Snapshot the dict handle under lock; engine calls run on the copy after
+ * unlock, so concurrent destroy/forget cannot dangle the caller. */
+static ECIDictHand eq_extra_dict_snapshot(eq_extra *e)
+{
+    ECIDictHand d;
+    pthread_mutex_lock(&eq_extra_lock);
+    d = e->dict;
+    pthread_mutex_unlock(&eq_extra_lock);
+    return d;
+}
+
+/* Drops the extras for h, releasing engine-side state. Unlinks under lock,
+ * then makes engine calls on local copies with no lock held. Answers 1 when
+ * something was dropped. Refcounted so a concurrent teach/lookup holding a
+ * reference cannot see a freed entry. */
+static int eq_extra_drop(ECIHand h)
+{
+    eq_extra *e, *prev = NULL;
+    ECIDictHand dict = NULL_DICT_HAND;
+    int dropped = 0;
+    pthread_mutex_lock(&eq_extra_lock);
+    e = eq_extras;
+    while (e) {
+        if (e->handle == h) {
+            if (prev)
+                prev->next = e->next;
+            else
+                eq_extras = e->next;
+            dict = e->dict;
+            e->dict = NULL_DICT_HAND;
+            e->refs--;
+            if (e->refs == 0) {
+                pthread_mutex_unlock(&eq_extra_lock);
+                free(e);
+            } else {
+                pthread_mutex_unlock(&eq_extra_lock);
+            }
+            dropped = 1;
+            break;
+        }
+        prev = e;
+        e = e->next;
+    }
+    if (!dropped)
+        pthread_mutex_unlock(&eq_extra_lock);
+    if (!dropped)
+        return 0;
+    if (dict) {
+        eciSetDict(h, NULL_DICT_HAND);
+        eciDeleteDict(h, dict);
+    }
+    return 1;
+}
+
+/* Ensure a dictionary exists for the slot. */
+static int eq_dict_ensure(ECIHand h, eq_extra *e)
+{
+    ECIDictHand existing = eq_extra_dict_snapshot(e);
+    ECIDictHand fresh;
+    if (existing)
+        return 1;
+    fresh = eciNewDict(h);
+    if (!fresh)
+        return 0;
+    if (eciSetDict(h, fresh) != 0) {
+        eciDeleteDict(h, fresh);
+        return 0;
+    }
+    pthread_mutex_lock(&eq_extra_lock);
+    if (e->dict) {
+        ECIDictHand winner = e->dict;
+        pthread_mutex_unlock(&eq_extra_lock);
+        eciSetDict(h, winner);
+        eciDeleteDict(h, fresh);
+        return 1;
+    }
+    e->dict = fresh;
+    pthread_mutex_unlock(&eq_extra_lock);
+    return 1;
+}
 
 /* Same hardening bounds as the sibling bridge: whole-utterance synthesis
  * holds one chunk in RAM; long text belongs in caller-side chunks (the
