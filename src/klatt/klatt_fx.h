@@ -134,7 +134,7 @@ int16_t  fxdivl(int32_t num, int32_t den) EVV_HOT;
 void fxmul_vector(const int32_t *__restrict src, int16_t coef, int32_t *__restrict acc, int32_t n) EVV_HOT;
 void fxmul1_vector(const int16_t *__restrict src, int16_t coef, int32_t *__restrict acc, int32_t n) EVV_HOT;
 int32_t  db2lin(int32_t db) EVV_HOT;
-int      verifyKlattHandle(void *handle);
+int      verifyKlattHandle(void *handle) EVV_COLD;
 
 /* One resonator's working state. The synthesizer state block holds 21 of
    these in an array starting at offset 0x64. Fields still called unknown are

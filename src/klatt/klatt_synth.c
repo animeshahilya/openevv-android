@@ -864,11 +864,35 @@ fp2->sa = (int16_t)(0x2000 - (fp2->sb >> 1) - (fp2->sc >> 2));
 
                 for (i = 0; i < k->smooth_span / 2; i++) {
                     upto += k->spans[i * 2];
+#if defined(__aarch64__) || defined(__ARM_NEON)
+                    /* NEON fill zeros */
+                    {
+                        int32_t target = upto;
+                        int32x4_t v_zero = vdupq_n_s32(0);
+                        for (; m + 3 < target; m += 4)
+                            vst1q_s32(&k->voiced_flags[m], v_zero);
+                        for (; m < target; m++)
+                            k->voiced_flags[m] = 0;
+                    }
+#else
                     for (; m < upto; m++)
                         k->voiced_flags[m] = 0;
+#endif
                     upto += k->spans[i * 2 + 1];
+#if defined(__aarch64__) || defined(__ARM_NEON)
+                    /* NEON fill ones */
+                    {
+                        int32_t target = upto;
+                        int32x4_t v_one = vdupq_n_s32(1);
+                        for (; m + 3 < target; m += 4)
+                            vst1q_s32(&k->voiced_flags[m], v_one);
+                        for (; m < target; m++)
+                            k->voiced_flags[m] = 1;
+                    }
+#else
                     for (; m < upto; m++)
                         k->voiced_flags[m] = 1;
+#endif
                 }
             }
 

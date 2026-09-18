@@ -603,8 +603,6 @@ int callSynthesizeArray(DeltaThis *d, Cell *rate, Cell *c2, Cell *c3,
     v13 = c13->w;
 
     for (i = 0; i < FRAME_WORDS; i++)
-        frame[i] = 0;
-    for (i = 0; i < FRAME_WORDS; i++)
         frame[i] = DEFAULT_FRAME[i];
 
     /* Everything after the fixed arguments was pushed by a rule, so each one
