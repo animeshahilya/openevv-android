@@ -461,10 +461,8 @@ class EloquenceTtsService : TextToSpeechService() {
         // a byte position, not a char position, and the two only coincide
         // when nothing in the chunk needed encodeForEngine's multi-byte
         // BEST_FIT_FALLBACK or its single-byte supplementary-code-point
-        // '?' collapse). Empty array is a safe initial value: onIndexMark
-        // is only ever invoked by the native call inside the loop below,
-        // by which point this has already been set for that call's chunk.
-        var chunkByteToChar = IntArray(0)
+        // '?' collapse).
+        var chunkByteToChar: IntArray? = null
         val consumer = object : EloquenceNative.AudioConsumer {
             override fun onAudioChunk(data: ByteArray, length: Int): Boolean {
                 if (isCancelledOrFinished(callback)) return false
@@ -514,11 +512,7 @@ class EloquenceTtsService : TextToSpeechService() {
                 // rangeStart as an inverted or over-long range - that throws
                 // on the binder thread and kills the whole synthesis
                 // request.
-                val chunkCharOffset = if (chunkByteToChar.isEmpty()) {
-                    0
-                } else {
-                    chunkByteToChar[charOffset.coerceIn(0, chunkByteToChar.size - 1)]
-                }
+                val chunkCharOffset = chunkByteToChar?.getOrNull(charOffset.coerceIn(0, (chunkByteToChar?.size ?: 1) - 1)) ?: 0
                 val end = clampHighlightEnd(lastMark, chunkBaseOffset + chunkCharOffset, rawText.length)
                 if (end != null && end > lastMark) {
                     val deliveredFrames = deliveredBytes / 2

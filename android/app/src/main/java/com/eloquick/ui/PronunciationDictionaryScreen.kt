@@ -56,6 +56,7 @@ import com.eloquick.tts.mergeDictionaries
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.nio.charset.StandardCharsets
 
 /**
  * Stable identity for one row: the entry's own content plus which occurrence
@@ -115,6 +116,8 @@ fun PronunciationDictionaryScreen(
     emptyStateText: String = kind.emptyStateText,
     exportFileName: String = kind.exportFileName,
     showSuggestButton: Boolean = kind.supportsPhoneticSuggestions,
+    // New: load dictionary file from text file (Windows-1252, tab-separated)
+    onLoadDictFile: suspend (String, DictionaryKind) -> Int = { _, _ -> 6 },
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -205,11 +208,27 @@ fun PronunciationDictionaryScreen(
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
                     context.contentResolver.openOutputStream(uri)?.use { stream ->
-                        stream.write(encodePronunciationDictionary(entries).toByteArray(Charsets.UTF_8))
+                        stream.write(encodePronunciationDictionary(entries).toByteArray(StandardCharsets.UTF_8))
                     }
                 }.isSuccess
             }
             statusMessage = if (ok) "Dictionary exported" else "Couldn't save the file"
+        }
+    }
+    val loadDictFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val kindForLoader = if (kind == DictionaryKind.ABBREVIATION) DictionaryKind.ABBREVIATION else DictionaryKind.MAIN
+            val result = withContext(Dispatchers.IO) {
+                onLoadDictFile(uri.toString(), kindForLoader)
+            }
+            val message = when (result) {
+                0 -> "Dictionary loaded successfully"
+                2 -> "File not found"
+                6 -> "Couldn't load dictionary (access error or invalid format)"
+                else -> "Dictionary load failed (error $result)"
+            }
+            statusMessage = message
         }
     }
 
@@ -266,6 +285,13 @@ fun PronunciationDictionaryScreen(
                         enabled = entries.isNotEmpty(),
                         modifier = Modifier.weight(1f),
                     ) { Text("Export file") }
+                    OutlinedButton(
+                        onClick = {
+                            val kindForLoader = if (kind == DictionaryKind.ABBREVIATION) DictionaryKind.ABBREVIATION else DictionaryKind.MAIN
+                            loadDictFileLauncher.launch(arrayOf("text/*"))
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Load dict file") }
                 }
             }
 

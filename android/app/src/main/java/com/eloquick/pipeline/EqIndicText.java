@@ -51,10 +51,11 @@ public final class EqIndicText {
         final int len = text.length();
         for (int i = 0; i < len; i++) {
             char c = text.charAt(i);
-            if ((c >= 0x0900 && c <= 0x0D7F) || c == 0x20B9 || c == '/' || c == ','
+            // Indic scripts range + rupee sign + danda + common Indian punctuation/shorthand
+            if ((c >= 0x0900 && c <= 0x0D7F) || c == 0x20B9 || c == '/' || c == '।' || c == '॥'
                     || c == 'k' || c == 'K' || c == 'l' || c == 'L'
                     || c == 'c' || c == 'C' || c == 'r' || c == 'R'
-                    || c == 's' || c == 'S' || c == 'i' || c == 'I') {
+                    || c == 's' || c == 'S') {
                 return true;
             }
         }

@@ -138,6 +138,8 @@ static ECIHand evn_create_for_language(int language, int hetero)
     unsigned int langs[64];
     int n = 64, k;
 
+    /* The bind: reading the registry is what binds it; the result is
+     * discarded - this call's only job is the side effect. */
     if (eciGetAvailableLanguages(langs, &n) != 0 || n < 1)
         return (ECIHand)0;
     for (k = 0; k < n; k++) {
@@ -164,6 +166,15 @@ typedef struct {
     char dict_path[EVN_MAX_DICT_PATH];
     char abbv_path[EVN_MAX_DICT_PATH];
 } evn_slot;
+
+/* Wait for the slot's engine to go idle (bounded). False = still busy. */
+static int evn_slot_idle(evn_slot *s)
+{
+    int spins;
+    for (spins = 0; spins < EVN_DRAIN_SPINS && eciSpeaking(s->h); spins++)
+        usleep(EVN_DRAIN_SLEEP_US);
+    return !eciSpeaking(s->h);
+}
 
 static evn_slot evn_slots[EVN_MAX_SLOTS];
 static pthread_mutex_t evn_slots_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -230,15 +241,6 @@ static evn_slot *evn_find_or_make_slot(int lang_id, int hetero, int ssml)
         pthread_mutex_unlock(&evn_slots_lock);
         return s;
     }
-}
-
-/* Wait for the slot's engine to go idle (bounded). False = still busy. */
-static int evn_slot_idle(evn_slot *s)
-{
-    int spins;
-    for (spins = 0; spins < EVN_DRAIN_SPINS && eciSpeaking(s->h); spins++)
-        usleep(EVN_DRAIN_SLEEP_US);
-    return !eciSpeaking(s->h);
 }
 
 /* Reload user dictionaries only when a path changed since the last call
@@ -501,8 +503,15 @@ Java_com_eloquick_tts_EloquenceNative_nativeGeneratePhonemes(JNIEnv *env, jobjec
         free(buf);
         return NULL;
     }
+    evn_call c = {0};
+    c.frame[0] = 0;
     eciSetParam(h, 1 /* P_INPUT_TYPE */, 1);
     eciSetParam(h, 0 /* P_SYNTH_MODE */, 1);
+    if (!eciSetOutputBuffer(h, EVN_FRAME, c.frame)) {
+        free(buf);
+        pthread_mutex_unlock(&evn_call_lock);
+        return NULL;
+    }
     eciRegisterCallback(h, evn_phoneme_message, NULL);
     if (eciAddText(h, buf)
             && eciGeneratePhonemes(h, (int)sizeof(phoneme_buf), phoneme_buf) > 0) {
@@ -520,6 +529,132 @@ Java_com_eloquick_tts_EloquenceNative_nativeGeneratePhonemes(JNIEnv *env, jobjec
     pthread_mutex_unlock(&evn_call_lock);
     free(buf);
     return answer;
+}
+
+/* ---- Dictionary file loading -------------------------------------------
+ * Load a tab-separated Windows-1252 text file into the engine's dictionary.
+ * Format: key<TAB>say per line. Returns eciDictNoError (0) on success. */
+static int evn_load_dict_file(ECIHand h, ECIDictHand dict, int volume, const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return 6; /* eciDictAccessError */
+
+    char *line = NULL;
+    size_t len = 0;
+    ssize_t read;
+    int taught = 0, refused = 0;
+
+    while ((read = getline(&line, &len, f)) != -1) {
+        char *tab = strchr(line, '\t');
+        if (!tab)
+            continue;
+        *tab = '\0';
+        char *key = line;
+        char *say = tab + 1;
+
+        /* Trim trailing newline/whitespace */
+        char *end = say + strlen(say) - 1;
+        while (end > say && (*end == '\n' || *end == '\r' || *end == ' ' || *end == '\t'))
+            *end-- = '\0';
+
+        if (strlen(key) == 0 || strlen(say) == 0)
+            continue;
+
+        char *pair = malloc(strlen(key) + strlen(say) + 2);
+        if (!pair)
+            continue;
+        memcpy(pair, key, strlen(key) + 1);
+        memcpy(pair + strlen(key) + 1, say, strlen(say) + 1);
+
+        int rc = eciUpdateDict(h, dict, volume, pair, pair + strlen(key) + 1);
+        free(pair);
+        if (rc == 0)
+            taught++;
+        else
+            refused++;
+    }
+    free(line);
+    fclose(f);
+    if (refused)
+        LOGW("Dictionary load: %d of %d entries refused", refused, taught + refused);
+    return taught > 0 ? 0 : 6;
+}
+
+/* JNI: Load dictionary file for a whole-utterance slot.
+ * Class:     com_eloquick_tts_EloquenceNative
+ * Method:    nativeLoadDictFile
+ * Signature: (JILjava/lang/String;)I */
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloquenceNative_nativeLoadDictFile(JNIEnv *env, jobject thiz,
+        jint lang_id, jint volume, jstring path)
+{
+    (void)thiz;
+    if (path == NULL)
+        return 6;
+    pthread_once(&evn_init_once, evn_bind_registry);
+    const char *path_str = (*env)->GetStringUTFChars(env, path, NULL);
+    if (!path_str)
+        return 2;
+    ECIHand h = evn_create_for_language((int)lang_id, 0);
+    if (h == (ECIHand)0) {
+        (*env)->ReleaseStringUTFChars(env, path, path_str);
+        return 6;
+    }
+    ECIDictHand dict = eciNewDict(h);
+    if (dict == NULL_DICT_HAND) {
+        eciDelete(h);
+        (*env)->ReleaseStringUTFChars(env, path, path_str);
+        return 6;
+    }
+    if (eciSetDict(h, dict) != 0) {
+        eciDeleteDict(h, dict);
+        eciDelete(h);
+        (*env)->ReleaseStringUTFChars(env, path, path_str);
+        return 6;
+    }
+    int rc = evn_load_dict_file(h, dict, (int)volume, path_str);
+    (*env)->ReleaseStringUTFChars(env, path, path_str);
+    eciDelete(h);
+    return (jint)rc;
+}
+
+/* JNI: Load dictionary file for a streaming session.
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeStreamDictLoadFile
+ * Signature: (JILjava/lang/String;)I */
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamDictLoadFile(JNIEnv *env, jclass cls,
+        jlong shandle, jint volume, jstring path)
+{
+    (void)cls;
+    if (!path)
+        return 6;
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    if (!s)
+        return 6;
+    const char *path_str = (*env)->GetStringUTFChars(env, path, NULL);
+    if (!path_str)
+        return 2;
+    eq_extra *e = eq_extra_get(s->handle);
+    if (!e) {
+        (*env)->ReleaseStringUTFChars(env, path, path_str);
+        return 6;
+    }
+    if (!eq_dict_ensure(s->handle, e)) {
+        eq_extra_release(e);
+        (*env)->ReleaseStringUTFChars(env, path, path_str);
+        return 6;
+    }
+    ECIDictHand dict = eq_extra_dict_snapshot(e);
+    eq_extra_release(e);
+    if (!dict) {
+        (*env)->ReleaseStringUTFChars(env, path, path_str);
+        return 6;
+    }
+    int rc = evn_load_dict_file(s->handle, dict, (int)volume, path_str);
+    (*env)->ReleaseStringUTFChars(env, path, path_str);
+    return (jint)rc;
 }
 
 JNIEXPORT jboolean JNICALL
@@ -638,7 +773,7 @@ Java_com_eloquick_tts_EloquenceNative_nativeSynthesize(JNIEnv *env, jobject thiz
         if (shaping[i] >= 0)
             eciSetVoiceParam(s->h, 0, i, shaping[i]);
     }
-    eciSetParam(s->h, 8 /* P_REAL_WORLD_UNITS */, real_world_units ? 1 : 0);
+eciSetParam(s->h, 8 /* P_REAL_WORLD_UNITS */, real_world_units ? 1 : 0);
     {
         /* >= 8000 is hertz directly (docs/api.md); 0 falls back to the
          * engine-native 11025. Resolved rate is stashed for the pause
@@ -649,11 +784,19 @@ Java_com_eloquick_tts_EloquenceNative_nativeSynthesize(JNIEnv *env, jobject thiz
     }
     c.cancelled = 0;
     c.mark_count = 0;
+    memset(c.mark_bytes, 0, sizeof(c.mark_bytes));
+    memset(c.mark_chars, 0, sizeof(c.mark_chars));
     {
         int up = evn_upsample_index(method_name);
         if (up >= 0)
             eciSetParam(s->h, 10 /* P_UPSAMPLE_METHOD */, up);
     }
+    /* Ensure annotations are on and synth mode is immediate (0) for
+     * whole-utterance synthesis. These are idempotent but must be set
+     * after slot creation/reuse because the engine may have changed them
+     * during a previous utterance. */
+    eciSetParam(s->h, 1 /* P_INPUT_TYPE */, 1);
+    eciSetParam(s->h, 0 /* P_SYNTH_MODE */, 0);
     eciSetParam(s->h, 3 /* P_DICTIONARY */, abbreviation_expansion ? 0 : 1);
     evn_apply_dictionaries(s, dict_name, abbv_name);
 

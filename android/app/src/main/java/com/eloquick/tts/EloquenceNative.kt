@@ -97,6 +97,20 @@ object EloquenceNative {
     external fun nativeGeneratePhonemes(langId: Int, text: ByteArray): String?
 
     /**
+     * Loads a user dictionary file into the engine's dictionary volume.
+     *
+     * The file must be a tab-separated text file (key<TAB>translation per line)
+     * encoded in Windows-1252. The engine expects this format per IBM's
+     * dictionary specification.
+     *
+     * @param langId the engine language ID (e.g., 0x10000 for US English)
+     * @param volume the dictionary volume: 0=Main, 1=Root, 2=Abbreviation
+     * @param path absolute path to the dictionary file
+     * @return 0 on success, non-zero error code (see eci.h ECIError codes)
+     */
+    external fun nativeLoadDictFile(langId: Int, volume: Int, path: String): Int
+
+    /**
      * -1 for any Int voice param means "leave it at the preset's own value"
      * (only [voicePreset]'s copy applies).
      *

@@ -138,8 +138,6 @@ public final class EqClauses {
     }
 
     private static boolean isNeutral(int cp) {
-        if (cp == 0x20 || cp == 0x09 || cp == 0x0A || cp == 0x0D) return true;
-        if (cp >= '0' && cp <= '9') return true;
         if (Character.isWhitespace(cp)) return true;
         if (Character.isDigit(cp)) return true;
         if (cp < 0x0041) return true;

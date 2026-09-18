@@ -523,24 +523,6 @@ def build_abi(
         "-fdata-sections",
         "-fvisibility=hidden",
         "-fPIC",
-    ] + opt_cflags + inc_flags
-
-    engine_quiet = [
-        "-w",
-        "-Wno-implicit-function-declaration",
-        "-Werror=int-conversion",
-        "-Werror=incompatible-pointer-types",
-    ]
-    android_warn = ["-Wall", "-Wextra", "-Wno-unused-parameter"]
-
-    common_cflags = [
-        "-fomit-frame-pointer" if not debug else "-fno-omit-frame-pointer",
-        "-DEVV_ARENA=1",
-        "-DECI_BUILDING=1",
-        "-ffunction-sections",
-        "-fdata-sections",
-        "-fvisibility=hidden",
-        "-fPIC",
     ] + opt_cflags + inc_flags + rom_defs
 
     header_floor = newest_header_mtime()

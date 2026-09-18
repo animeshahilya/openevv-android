@@ -306,9 +306,9 @@ target_include_directories(eloquick PUBLIC
     ${OPENEVV_ROM_INCLUDE_DIRS}
 )
 
-target_link_libraries(eloquick PUBLIC m pthread)
+target_link_libraries(eloquick PUBLIC m pthread log)
 
-if(OPENEVV_ROM_DEFINITIONS)
+    if(OPENEVV_ROM_DEFINITIONS)
     target_compile_definitions(eloquick PUBLIC ${OPENEVV_ROM_DEFINITIONS})
 endif()
 if(OPENEVV_JNI_DEFINITIONS)
@@ -344,7 +344,7 @@ if(OPENEVV_ENABLE_JNI AND EXISTS "${OPENEVV_EVN_JNI_FILE}")
         ${OPENEVV_ROM_INCLUDE_DIRS}
     )
 
-    target_link_libraries(openevv_jni PUBLIC m pthread)
+    target_link_libraries(openevv_jni PUBLIC m pthread log)
 
     if(OPENEVV_ROM_DEFINITIONS)
         target_compile_definitions(openevv_jni PUBLIC ${OPENEVV_ROM_DEFINITIONS})
