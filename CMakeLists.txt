@@ -324,6 +324,44 @@ set_target_properties(eloquick PROPERTIES
 )
 
 # =============================================================================
+# Shared Library: libopenevv_jni.so (whole-utterance bridge for
+# com.eloquick.tts.EloquenceNative - the Compose UI's engine path)
+# =============================================================================
+set(OPENEVV_EVN_JNI_FILE "${CMAKE_CURRENT_SOURCE_DIR}/android/eloquence_jni.c")
+if(OPENEVV_ENABLE_JNI AND EXISTS "${OPENEVV_EVN_JNI_FILE}")
+    set_source_files_properties(${OPENEVV_EVN_JNI_FILE}
+        PROPERTIES COMPILE_OPTIONS "${OPENEVV_MODERN_ALL_COMPILE_OPTIONS}"
+    )
+    add_library(openevv_jni SHARED
+        $<TARGET_OBJECTS:eloquick_objs>
+        ${CMAKE_CURRENT_SOURCE_DIR}/lib/eci_api.c
+        ${OPENEVV_EVN_JNI_FILE}
+    )
+
+    target_include_directories(openevv_jni PUBLIC
+        ${OPENEVV_CORE_INCLUDE_DIRS}
+        ${OPENEVV_LANG_INCLUDE_DIRS}
+        ${OPENEVV_ROM_INCLUDE_DIRS}
+    )
+
+    target_link_libraries(openevv_jni PUBLIC m pthread)
+
+    if(OPENEVV_ROM_DEFINITIONS)
+        target_compile_definitions(openevv_jni PUBLIC ${OPENEVV_ROM_DEFINITIONS})
+    endif()
+
+    target_link_options(openevv_jni PRIVATE ${OPENEVV_BASE_LINK_OPTIONS})
+    set_target_properties(openevv_jni PROPERTIES
+        OUTPUT_NAME "openevv_jni"
+        SOVERSION 1
+        VERSION ${PROJECT_VERSION}
+        ANDROID_SO_UNDEFINED OFF
+    )
+else()
+    message(STATUS "libopenevv_jni skipped (android/eloquence_jni.c missing or OPENEVV_ENABLE_JNI=OFF)")
+endif()
+
+# =============================================================================
 # Shared Library: libopenevv.so (compatibility, no JNI)
 # =============================================================================
 add_library(openevv SHARED

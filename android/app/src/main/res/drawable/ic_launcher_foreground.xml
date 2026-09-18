@@ -1,0 +1,29 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- A voice source (solid dot) with sound reaching outward - kept inside the
+         adaptive icon's 66dp safe zone so no ring is clipped by the launcher mask. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M42,54 m-8,0 a8,8 0 1,0 16,0 a8,8 0 1,0 -16,0" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M50.0,42.5 A14,14 0 0 1 50.0,65.5" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M55.8,34.3 A24,24 0 0 1 55.8,73.7" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M61.5,26.1 A34,34 0 0 1 61.5,81.9" />
+</vector>

@@ -1023,6 +1023,12 @@ static ECIHand eq_new_ex_hetero(int language)
 #define EQ_STREAM_FRAME 1024
 #define EQ_RING_BYTES (128 * 1024)
 #define EQ_START_SPINS 200
+#define EQ_INDEX_QUEUE 16
+/* With index marks the engine may run no further ahead of the reader than
+   this, so a mark is queued while its audio is still close to the listener
+   instead of minutes ahead (the engine synthesizes ~100x realtime; without
+   a cap it parks a full 128 KB ring of audio before the first mark). */
+#define EQ_INDEX_LEAD_BYTES (16 * 1024)
 
 typedef struct {
     ECIHand handle;
@@ -1045,6 +1051,16 @@ typedef struct {
     short frame[EQ_STREAM_FRAME];
     pthread_t worker;
 
+    /* Index marks (eciInsertIndex): values the app handed in with its text
+       (byte/char offsets of its own choosing -- the engine never reads
+       them, it just reports back the ones it has passed). Queued here for
+       the reader to drain between reads; guarded by lock. The session's
+       one-utterance-at-a-time contract keeps the small fixed queue safe. */
+    int want_indices;        /* session created for mark tracking */
+    int indices_enabled;     /* marks expected this utterance */
+    int mark_queue[EQ_INDEX_QUEUE];
+    int mark_count;
+
     /* prosody / pacing / pause / dict (evvdroid-style) */
     int pause_mode;          /* 0=keep 1=end-only 2=all */
     int phrase_prediction;
@@ -1064,13 +1080,38 @@ static int ECICALL eq_stream_message(ECIHand h, ECIMessage msg, int param, void 
     eq_stream *s = (eq_stream *)data;
     size_t want;
     (void)h;
+    if (msg == eciIndexReply) {
+        /* The engine reports marks the moment it has synthesized the audio
+           in front of them (stb_synthIndexCallback flushes those samples
+           to us first), so with the paced ring below a queued mark means
+           "this offset is being heard about now". param is whatever value
+           the app gave eciInsertIndex -- here a byte offset into its text.
+           No JNI is ever made from this thread; the reader drains the
+           queue between nativeStreamRead calls. A full queue drops the
+           mark: speech never stops for a lost highlight. */
+        if (!s->want_indices)
+            return eciDataProcessed;
+        pthread_mutex_lock(&s->lock);
+        if (s->mark_count < EQ_INDEX_QUEUE) {
+            s->mark_queue[s->mark_count++] = param < 0 ? 0 : param;
+            pthread_cond_broadcast(&s->filled);
+        }
+        pthread_mutex_unlock(&s->lock);
+        return eciDataProcessed;
+    }
     if (msg != eciWaveformBuffer)
         return eciDataProcessed;
     want = (size_t)param * sizeof(short);
     if (want == 0)
         return eciDataProcessed;
     pthread_mutex_lock(&s->lock);
-    while (!s->aborted && EQ_RING_BYTES - s->count < want)
+    /* Normally the engine fills the whole ring before it waits for room;
+       with index marks it is held to EQ_INDEX_LEAD_BYTES so marks stay
+       near the audio they belong to. The reader always keeps draining, so
+       this paces the engine rather than stopping it. */
+    while (!s->aborted
+           && (EQ_RING_BYTES - s->count < want
+               || (s->indices_enabled && s->count + want > EQ_INDEX_LEAD_BYTES)))
         pthread_cond_wait(&s->room, &s->lock);
     if (s->aborted) {
         pthread_mutex_unlock(&s->lock);
@@ -1136,6 +1177,18 @@ static void eq_stream_idle(eq_stream *s)
     pthread_mutex_unlock(&s->lock);
 }
 
+static jboolean eq_stream_finished(eq_stream *s);
+
+JNIEXPORT jlong JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamCreateWithIndices(JNIEnv *env,
+                                                        jclass cls, jint language,
+                                                        jboolean wantIndices);
+JNIEXPORT jboolean JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamSpeakWithMarks(JNIEnv *env,
+                                                       jclass cls, jlong shandle,
+                                                       jstring text,
+                                                       jintArray marks, jint nmarks);
+
 /*
  * Class:     com_eloquick_tts_EloQuickEngine
  * Method:    nativeStreamCreate
@@ -1147,6 +1200,27 @@ static void eq_stream_idle(eq_stream *s)
 JNIEXPORT jlong JNICALL
 Java_com_eloquick_tts_EloQuickEngine_nativeStreamCreate(JNIEnv *env, jclass cls,
                                                         jint language)
+{
+    return Java_com_eloquick_tts_EloQuickEngine_nativeStreamCreateWithIndices(
+            env, cls, language, JNI_FALSE);
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeStreamCreateWithIndices
+ * Signature: (IZ)J
+ *
+ * nativeStreamCreate, plus ECI index marks: when wantIndices is true the
+ * session's callback queues the marks the engine reports (values handed
+ * in per utterance via nativeStreamSpeakWithMarks) for the reader to
+ * drain between nativeStreamRead calls; marks ride with their audio
+ * because the ring is paced while they are enabled. A session created
+ * with JNI_FALSE behaves exactly like one from nativeStreamCreate.
+ */
+JNIEXPORT jlong JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamCreateWithIndices(JNIEnv *env,
+                                                        jclass cls, jint language,
+                                                        jboolean wantIndices)
 {
     eq_stream *s;
     ECIHand h;
@@ -1176,6 +1250,8 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamCreate(JNIEnv *env, jclass cls,
     pthread_cond_init(&s->room, NULL);
     pthread_cond_init(&s->filled, NULL);
     pthread_cond_init(&s->work, NULL);
+    s->want_indices = wantIndices ? JNI_TRUE : JNI_FALSE;
+    s->indices_enabled = 0;
     eciRegisterCallback(h, eq_stream_message, s);
     if (!eciSetOutputBuffer(h, EQ_STREAM_FRAME, s->frame)) {
         eciDelete(h);
@@ -1203,6 +1279,7 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamCreate(JNIEnv *env, jclass cls,
     s->lead_ms           = 300;
     s->last_speak_ms     = 0;
     s->dict_count        = 0;
+    s->mark_count        = 0;
     memset(s->dict_paths, 0, sizeof(s->dict_paths));
     /* The engine runs on whichever thread calls eciSynchronize -- here the
        worker below -- so it gets room for the rule dispatcher's frames:
@@ -1242,16 +1319,45 @@ static jboolean eq_stream_finished(eq_stream *s)
  *
  * Queues text and starts the engine; answers at once, samples come out of
  * nativeStreamRead. The bytes are kept until the next utterance because
- * nothing here knows whether the engine copied them.
+ * nothing here knows whether the engine copied them. Plain nativeStream-
+ * SpeakWithMarks: no marks.
  */
 JNIEXPORT jboolean JNICALL
 Java_com_eloquick_tts_EloQuickEngine_nativeStreamSpeak(JNIEnv *env, jclass cls,
                                                        jlong shandle, jstring text)
 {
+    return Java_com_eloquick_tts_EloQuickEngine_nativeStreamSpeakWithMarks(
+            env, cls, shandle, text, NULL, 0);
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeStreamSpeakWithMarks
+ * Signature: (JLjava/lang/String;[II)Z
+ *
+ * nativeStreamSpeak, plus index marks: marks[i] is a byte offset into
+ * `text`; the text is fed to the engine in segments split at those
+ * offsets with eciInsertIndex(offset) between segments, so the engine
+ * reports each mark exactly when it has spoken up to it. The value comes
+ * back unchanged through nativeStreamReadIndices -- the engine never
+ * reads it, so callers pick the meaning (here: byte offsets, convertible
+ * back to text positions). Offsets must ascend and stay inside the text;
+ * annotations in the text must not straddle an offset (a split one is
+ * spoken instead of obeyed). Marks only work on sessions created with
+ * nativeStreamCreateWithIndices; elsewhere they are silently ignored.
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamSpeakWithMarks(JNIEnv *env,
+                                                       jclass cls, jlong shandle,
+                                                       jstring text,
+                                                       jintArray marks, jint nmarks)
+{
     eq_stream *s = (eq_stream *)(intptr_t)shandle;
     const char *utf8;
     unsigned char *buf;
     size_t n;
+    jint *mv = NULL;
+    jsize nm = 0;
     (void)cls;
     if (!s || !text)
         return JNI_FALSE;
@@ -1270,20 +1376,65 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamSpeak(JNIEnv *env, jclass cls,
     }
     memcpy(buf, utf8, n + 1);
     (*env)->ReleaseStringUTFChars(env, text, utf8);
+    if (marks && s->want_indices) {
+        nm = (*env)->GetArrayLength(env, marks);
+        if (nmarks >= 0 && nm > nmarks) nm = nmarks;
+        if (nm > EQ_INDEX_QUEUE) nm = EQ_INDEX_QUEUE;
+        if (nm > 0)
+            mv = (*env)->GetIntArrayElements(env, marks, NULL);
+    }
     eq_stream_idle(s);
+    /* ABRDICT (NVDA-IBMTTS-Driver): eciDictionary 0 = abbreviation expansion
+     * on, 1 = off ("1 turns the dictionary off, not on" - eci.h). Applied at
+     * every speak entry while idle: the engine refuses eciSetParam while
+     * speaking, and this is the one point each utterance passes through after
+     * the previous one has drained. Until now the flag was stored by
+     * nativeStreamSetAbbreviations but never applied. A refusal (-1) is
+     * harmless - the last applied value stays in force. Default stays on,
+     * matching this file's historical default (the driver's own default is
+     * off); flip with nativeStreamSetAbbreviations. */
+    eciSetParam(s->handle, 3 /* P_DICTIONARY */, s->abbreviations ? 0 : 1);
     pthread_mutex_lock(&s->lock);
     s->aborted = 0;
     s->started = 0;
     s->done = 0;
     s->busy = 1;
     s->head = s->tail = s->count = 0;
+    s->mark_count = 0;
+    s->indices_enabled = (mv != NULL);
     pthread_mutex_unlock(&s->lock);
     free(s->text);
     s->text = buf;
-    if (!s->running)
+    if (!s->running) {
+        if (mv) (*env)->ReleaseIntArrayElements(env, marks, mv, JNI_ABORT);
         return eq_stream_finished(s);
-    if (!eciAddText(s->handle, buf))
-        return eq_stream_finished(s);
+    }
+    if (mv) {
+        /* Feed the text in segments, a mark between each: the engine
+           enqueues text and marks in call order, and reports a mark when
+           synthesis reaches it. One eciAddText per segment also keeps
+           every annotation whole inside its own call. */
+        size_t last = 0;
+        int i;
+        int placed = 0;
+        for (i = 0; i < nm; i++) {
+            int at = mv[i];
+            if (at <= (int)last || (size_t)at >= n) continue;
+            if (!eciAddText(s->handle, buf + last)) break;
+            if (!eciInsertIndex(s->handle, at)) break;
+            last = (size_t)at;
+            placed++;
+        }
+        (void)placed;
+        if (!eciAddText(s->handle, buf + last)) {
+            (*env)->ReleaseIntArrayElements(env, marks, mv, JNI_ABORT);
+            return eq_stream_finished(s);
+        }
+        (*env)->ReleaseIntArrayElements(env, marks, mv, JNI_ABORT);
+    } else {
+        if (!eciAddText(s->handle, buf))
+            return eq_stream_finished(s);
+    }
     if (!eciSynthesize(s->handle))
         return eq_stream_finished(s);
     pthread_mutex_lock(&s->lock);
@@ -1328,6 +1479,14 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamRead(JNIEnv *env, jclass cls,
         return 0;
     }
     got = s->count < room ? s->count : room;
+    /* With marks on, never starve the engine of room mid-utterance: hold
+       back one frame's worth so the paced ring cannot deadlock (the writer
+       waiting for lead room while the reader waits for a fuller buffer).
+       The tail end of the utterance still drains fully -- done arrives
+       with the ring already empty. */
+    if (s->indices_enabled && got > EQ_STREAM_FRAME * sizeof(short)
+            && !s->done)
+        got -= EQ_STREAM_FRAME * sizeof(short);
     /* Copy directly from ring to Java array in 1-2 calls (avoids malloc). */
     {
         size_t first = EQ_RING_BYTES - s->tail;
@@ -1369,8 +1528,66 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamStop(JNIEnv *env, jclass cls,
     pthread_mutex_lock(&s->lock);
     s->aborted = 1;
     s->head = s->tail = s->count = 0;
+    s->mark_count = 0;
     pthread_cond_broadcast(&s->room);
     pthread_cond_broadcast(&s->filled);
+    pthread_mutex_unlock(&s->lock);
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeStreamReadIndices
+ * Signature: (J[II)I
+ *
+ * Takes up to max index marks reached by the engine (values as handed to
+ * eciInsertIndex -- byte offsets the app chose) into dst. Answers how many
+ * were taken; 0 when none yet. Call between nativeStreamRead calls on the
+ * reader's thread: mark values arrive with (just ahead of) their audio.
+ */
+JNIEXPORT jint JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamReadIndices(JNIEnv *env,
+                                                             jclass cls,
+                                                             jlong shandle,
+                                                             jintArray dst,
+                                                             jint max)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    jint out = 0;
+    (void)cls;
+    if (!s || !dst || max <= 0)
+        return 0;
+    if ((*env)->GetArrayLength(env, dst) < max)
+        max = (*env)->GetArrayLength(env, dst);
+    pthread_mutex_lock(&s->lock);
+    while (out < max && s->mark_count > 0) {
+        (*env)->SetIntArrayRegion(env, dst, out, 1, &s->mark_queue[0]);
+        memmove(s->mark_queue, s->mark_queue + 1,
+                (size_t)(s->mark_count - 1) * sizeof(int));
+        s->mark_count--;
+        out++;
+    }
+    pthread_mutex_unlock(&s->lock);
+    return out;
+}
+
+/*
+ * Class:     com_eloquick_tts_EloQuickEngine
+ * Method:    nativeStreamClearIndices
+ * Signature: (J)V
+ */
+JNIEXPORT void JNICALL
+Java_com_eloquick_tts_EloQuickEngine_nativeStreamClearIndices(JNIEnv *env,
+                                                              jclass cls,
+                                                              jlong shandle)
+{
+    eq_stream *s = (eq_stream *)(intptr_t)shandle;
+    (void)env;
+    (void)cls;
+    if (!s)
+        return;
+    pthread_mutex_lock(&s->lock);
+    s->mark_count = 0;
+    s->indices_enabled = 0;
     pthread_mutex_unlock(&s->lock);
 }
 
@@ -1727,74 +1944,8 @@ Java_com_eloquick_tts_EloQuickEngine_nativeGeneratePhonemes(JNIEnv *env, jclass 
 }
 
 /* ========================================================================
- * Index/Mark Callbacks (for synchronization)
+ * Stream Control (Voice, Rate, Dictionary)
  * ======================================================================== */
-
-static int ECICALL eq_index_callback(ECIHand h, ECIMessage msg, int param, void *data);
-
-static JavaVM *g_jvm = NULL;
-static jclass g_engine_class = NULL;
-static jmethodID g_index_callback_mid = NULL;
-static jmethodID g_bookmark_callback_mid = NULL;
-
-/*
- * Class:     com_eloquick_tts_EloQuickEngine
- * Method:    nativeSetIndexCallback
- * Signature: (J)V
- *
- * Enables index callbacks. The Java side must implement:
- *   void onIndex(int index);
- */
-JNIEXPORT void JNICALL
-Java_com_eloquick_tts_EloQuickEngine_nativeSetIndexCallback(JNIEnv *env, jclass cls,
-                                                             jlong handle)
-{
-    (void)env;
-    (void)cls;
-    if (!(ECIHand)(intptr_t)handle)
-        return;
-    (*env)->GetJavaVM(env, &g_jvm);
-    if (!g_engine_class) {
-        jclass local = (*env)->FindClass(env, "com/eloquick/tts/EloQuickEngine");
-        g_engine_class = (jclass)(*env)->NewGlobalRef(env, local);
-        (*env)->DeleteLocalRef(env, local);
-    }
-    if (!g_index_callback_mid) {
-        g_index_callback_mid = (*env)->GetStaticMethodID(env, g_engine_class,
-                                                         "onIndex", "(I)V");
-    }
-    if (!g_bookmark_callback_mid) {
-        g_bookmark_callback_mid = (*env)->GetStaticMethodID(env, g_engine_class,
-                                                            "onBookmark", "(I)V");
-    }
-    eciRegisterCallback((ECIHand)(intptr_t)handle, eq_index_callback, NULL);
-}
-
-static int ECICALL eq_index_callback(ECIHand h, ECIMessage msg, int param, void *data)
-{
-    JNIEnv *env;
-    int need_detach = 0;
-    (void)h;
-    (void)data;
-    if (!g_jvm || !g_engine_class)
-        return eciDataProcessed;
-
-    if ((*g_jvm)->GetEnv(g_jvm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
-        if ((*g_jvm)->AttachCurrentThread(g_jvm, &env, NULL) != JNI_OK)
-            return eciDataProcessed;
-        need_detach = 1;
-    }
-
-    if (msg == eciIndexReply && g_index_callback_mid) {
-        (*env)->CallStaticVoidMethod(env, g_engine_class, g_index_callback_mid, param);
-    } else if (msg == eciPhonemeBuffer && g_bookmark_callback_mid) {
-        (*env)->CallStaticVoidMethod(env, g_engine_class, g_bookmark_callback_mid, param);
-    }
-
-    if (need_detach)
-        (*g_jvm)->DetachCurrentThread(g_jvm);
-    return eciDataProcessed;
-}
 
 /* ========================================================================
  * Audio Format Query

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Backs the FileProvider declared in AndroidManifest.xml. Only the one
+     subdirectory TroubleshootScreen actually writes the shared diagnostic
+     log into (context.cacheDir/diagnostics/) is exposed - not the whole
+     cache dir, and nothing under filesDir (where DiagnosticLog's own
+     per-process log files, and AppPreferences' device-protected settings,
+     actually live) is reachable through this provider at all. -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="diagnostics" path="diagnostics/" />
+</paths>

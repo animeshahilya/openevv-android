@@ -1,23 +1,15 @@
 <resources>
-    <!-- Base application theme. -->
-    <style name="Theme.EloQuick" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Primary brand color. -->
-        <item name="colorPrimary">@color/purple_700</item>
-        <item name="colorPrimaryVariant">@color/purple_500</item>
-        <item name="colorOnPrimary">@color/white</item>
-        <!-- Secondary brand color. -->
-        <item name="colorSecondary">@color/teal_200</item>
-        <item name="colorSecondaryVariant">@color/teal_700</item>
-        <item name="colorOnSecondary">@color/black</item>
-        <!-- Status bar color. -->
-        <item name="android:statusBarColor">?attr/colorPrimaryVariant</item>
-        <!-- Customize your theme here. -->
-        <item name="android:windowLightStatusBar">false</item>
-    </style>
-
-    <style name="Theme.EloQuick.Splash" parent="Theme.SplashScreen">
-        <item name="windowSplashScreenBackground">@color/purple_900</item>
+    <!-- Cold-start-only theme (see MainActivity.onCreate's installSplashScreen call):
+         the system paints this for the brief window between process start and the
+         first Compose frame, when nothing this app draws itself even exists yet.
+         Reuses the adaptive icon's own foreground vector as the animated icon
+         (the platform's own recommended source for it) rather than a separate
+         asset to keep in sync. postSplashScreenTheme hands off to the real
+         theme the manifest already declares at the application level the moment
+         the splash screen dismisses. -->
+    <style name="Theme.App.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
         <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
-        <item name="postSplashScreenTheme">@style/Theme.EloQuick</item>
+        <item name="postSplashScreenTheme">@android:style/Theme.DeviceDefault.NoActionBar</item>
     </style>
 </resources>

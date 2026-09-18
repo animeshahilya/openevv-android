@@ -97,6 +97,7 @@ class BuildResult:
     evv_path: Optional[Path] = None
     lib_path: Optional[Path] = None
     compat_lib_path: Optional[Path] = None
+    evn_lib_path: Optional[Path] = None
     cli_size: int = 0
     lib_size: int = 0
     duration: float = 0.0
@@ -293,7 +294,7 @@ def linker_accepts(clang: Path, flag: str, target_flag: Optional[List[str]] = No
                 pass
 
 
-def collect_sources(langs: List[str]) -> Tuple[List[Path], List[Path], List[Path], List[Path], List[Path], List[str]]:
+def collect_sources(langs: List[str]) -> Tuple[List[Path], List[Path], List[Path], List[Path], List[Path], List[Path], List[str]]:
     """Collect all source files and include directories."""
     # Core engine sources
     src_files = []
@@ -328,15 +329,20 @@ def collect_sources(langs: List[str]) -> Tuple[List[Path], List[Path], List[Path
                 rom_files.append(rom_dir / fn)
         rom_defs.append("-DEVV_ROM_JAJP")
 
-    # JNI bridge
+    # JNI bridges: eloquick (streaming, EloQuickEngine) and eloquence
+    # (whole-utterance, EloquenceNative -> libopenevv_jni.so).
     jni_files = []
     jni_c = ROOT / "android" / "eloquick_jni.c"
     if jni_c.exists():
         llvm_prebuilt = Path(os.environ.get("ANDROID_NDK_HOME", "")) / "toolchains" / "llvm" / "prebuilt"
         # We'll check for jni.h availability later when we have the NDK root
         jni_files.append(jni_c)
+    evn_jni_files = []
+    evn_c = ROOT / "android" / "eloquence_jni.c"
+    if evn_c.exists():
+        evn_jni_files.append(evn_c)
 
-    return src_files, lang_files, rom_files, jni_files, src_dirs + lang_dirs + rom_dirs, rom_defs
+    return src_files, lang_files, rom_files, jni_files, evn_jni_files, src_dirs + lang_dirs + rom_dirs, rom_defs
 
 
 def generate_delta_langs_c(build_dir: Path, langs: List[str]) -> Path:
@@ -480,7 +486,7 @@ def build_abi(
     langs_c_mtime = langs_c.stat().st_mtime
 
     # Collect sources
-    src_files, lang_files, rom_files, jni_files, include_dirs, rom_defs = collect_sources(langs)
+    src_files, lang_files, rom_files, jni_files, evn_jni_files, include_dirs, rom_defs = collect_sources(langs)
 
     # Check for JNI header availability
     jni_h_found = False
@@ -492,10 +498,11 @@ def build_abi(
                 break
 
     if jni_h_found:
-        print("JNI bridge: enabled (android/eloquick_jni.c)")
+        print("JNI bridges: enabled (android/eloquick_jni.c + android/eloquence_jni.c)")
     else:
-        print("JNI bridge: skipped (<jni.h> not found in NDK)")
+        print("JNI bridges: skipped (<jni.h> not found in NDK)")
         jni_files = []
+        evn_jni_files = []
 
     include_dirs = sorted(set(include_dirs + [build_dir, ROOT / "include"]))
     inc_flags = [f"-I{d}" for d in include_dirs]
@@ -549,7 +556,7 @@ def build_abi(
 
     lto_tag = " + ThinLTO" if use_thin_lto else " (no ThinLTO)"
 
-    jni_set = {p.resolve() for p in jni_files + [ROOT / "cli" / "evv.c", ROOT / "lib" / "eci_api.c"]}
+    jni_set = {p.resolve() for p in jni_files + evn_jni_files + [ROOT / "cli" / "evv.c", ROOT / "lib" / "eci_api.c"]}
 
     core_sources = src_files + lang_files + rom_files + [langs_c]
     print(f"Compiling {len(core_sources)} core sources [{'DEBUG' if debug else '-O3 release'}{lto_tag if not debug else ''}]...")
@@ -671,9 +678,46 @@ def build_abi(
     cli_size = out_eloquick.stat().st_size
     lib_size = out_eloquick_so.stat().st_size
 
+    # Eloquence bridge (whole-utterance, EloquenceNative): same engine
+    # objects + eci_api, own JNI translation unit, own SONAME. This is what
+    # the Compose UI loads (System.loadLibrary("openevv_jni")); libopenevv.so
+    # above stays a pure-ECI compat mirror with no JNI inside.
+    out_evn_so = build_dir / "libopenevv_jni.so"
+    evn_lib_size = 0
+    if evn_jni_files:
+        print(f"Linking shared library {out_evn_so}...")
+        evn_objs = []
+        for ls in evn_jni_files:
+            o = compile_source(
+                ls, obj_dir, clang, common_cflags, target_flag,
+                engine_quiet, android_warn, jni_set, header_floor, langs_c_mtime
+            )
+            if not o:
+                return BuildResult(abi=abi, success=False, error=f"Library wrapper compilation failed for {ls}")
+            evn_objs.append(o)
+        evn_rsp = build_dir / "evn_objects.rsp"
+        with open(evn_rsp, "w") as f:
+            for obj in core_objs + [lib_objs[0]] + evn_objs:
+                f.write(str(obj).replace("\\", "/") + "\n")
+        link_evn_cmd = [
+            str(clang),
+            "-o", str(out_evn_so),
+            "-shared",
+            "-Wl,-soname,libopenevv_jni.so",
+            "-Wl,--gc-sections",
+        ] + target_flag + strip_flags + opt_link_flags + linker_alignment_flags + [
+            "-lm", "-llog", "-pthread", f"@{evn_rsp}"
+        ]
+        res = subprocess.run(link_evn_cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            return BuildResult(abi=abi, success=False, error=f"Eloquence bridge linking failed:\n{res.stderr}")
+        evn_lib_size = out_evn_so.stat().st_size
+
     print(f"ABI {abi} Build Complete ({duration:.1f}s):")
     print(f"  CLI binary:     {out_eloquick} (also {out_evv}) [{cli_size:,} bytes]")
-    print(f"  Shared library: {out_eloquick_so} (also {out_openevv_so}) [{lib_size:,} bytes]\n")
+    print(f"  Shared library: {out_eloquick_so} (also {out_openevv_so}) [{lib_size:,} bytes]")
+    if evn_jni_files:
+        print(f"  JNI bridge:     {out_evn_so} [{evn_lib_size:,} bytes]")
 
     return BuildResult(
         abi=abi,
@@ -682,6 +726,7 @@ def build_abi(
         evv_path=out_evv,
         lib_path=out_eloquick_so,
         compat_lib_path=out_openevv_so,
+        evn_lib_path=out_evn_so if evn_jni_files else None,
         cli_size=cli_size,
         lib_size=lib_size,
         duration=duration,

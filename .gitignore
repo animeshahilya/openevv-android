@@ -3,10 +3,25 @@
 # nothing here is needed to build.
 analysis/
 build/
+_incoming/
 .wine/
 result
 result-*
 __pycache__/
+
+# Prebuilt native libraries under the Gradle tree: reproduced at any time by
+# `py tools/build_android.py --abi <abi>` (libopenevv_jni.so) and dropped into
+# android/app/src/main/jniLibs/<abi>/ for packaging. Never committed.
+android/app/src/main/jniLibs/
+
+# Gradle build artifacts
+*.gradle/
+gradle/
+gradlew
+gradlew.bat
+local.properties
+*.iml
+.idea/
 
 # Every form of a language's rules that a build makes rather than holds.
 #
@@ -41,3 +56,28 @@ speak.wav
 # The provenance census's site table, written by the decompiler beside the
 # rules it numbers. Generated like the rules themselves.
 lang/*/provenance-sites-*.txt
+
+# Android Studio / Gradle
+*.apk
+*.aar
+*.ap_
+*.dex
+*.hprof
+*.class
+*.jar
+*.war
+*.ear
+*.zip
+*.tar
+*.gz
+*.tgz
+
+# IntelliJ / Android Studio
+.idea/
+*.ipr
+*.iws
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,32 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="purple_200">#FFBB86FC</color>
-    <color name="purple_500">#FF6200EE</color>
-    <color name="purple_700">#FF3700B3</color>
-    <color name="purple_900">#FF1A006D</color>
-    <color name="teal_200">#FF03DAC5</color>
-    <color name="teal_700">#FF018786</color>
-    <color name="black">#FF000000</color>
-    <color name="white">#FFFFFFFF</color>
-    
-    <!-- EloQuick brand colors -->
-    <color name="eloquick_primary">@color/purple_700</color>
-    <color name="eloquick_primary_variant">@color/purple_500</color>
-    <color name="eloquick_secondary">@color/teal_200</color>
-    <color name="eloquick_surface">@color/white</color>
-    <color name="eloquick_surface_variant">#FFF5F5F5</color>
-    <color name="eloquick_on_primary">@color/white</color>
-    <color name="eloquick_on_surface">#FF1A1A1A</color>
-    <color name="eloquick_on_surface_variant">#FF49454F</color>
-    <color name="eloquick_outline">#FF79747E</color>
-    <color name="eloquick_outline_variant">#FFCAC4D0</color>
-    <color name="eloquick_error">#FFBA1A1A</color>
-    <color name="eloquick_error_container">@color/white</color>
-    <color name="eloquick_on_error">@color/white</color>
-    
-    <!-- State layer colors -->
-    <color name="eloquick_hover">#08000000</color>
-    <color name="eloquick_focus">#1A000000</color>
-    <color name="eloquick_pressed">#1F000000</color>
-    <color name="eloquick_dragged">#14000000</color>
+    <!-- Revived Compose UI cold-start splash (from EloquenceRevived). -->
+    <color name="splash_background">#FF2E5EAA</color>
 </resources>
