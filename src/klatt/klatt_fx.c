@@ -18,6 +18,30 @@ uint32_t klatt_rand(int16_t *out, int32_t n, uint32_t seed)
 {
     int32_t i = 0;
 
+#if defined(__aarch64__) || defined(__ARM_NEON)
+    /* 8x unrolled with NEON stores: process 8 samples per iteration */
+    for (; i + 7 < n; i += 8) {
+        uint32_t s0, s1, s2, s3, s4, s5, s6, s7;
+        s0 = seed * 0x19660du + 0x3c6ef35fu;
+        s1 = s0    * 0x19660du + 0x3c6ef35fu;
+        s2 = s1    * 0x19660du + 0x3c6ef35fu;
+        s3 = s2    * 0x19660du + 0x3c6ef35fu;
+        s4 = s3    * 0x19660du + 0x3c6ef35fu;
+        s5 = s4    * 0x19660du + 0x3c6ef35fu;
+        s6 = s5    * 0x19660du + 0x3c6ef35fu;
+        s7 = s6    * 0x19660du + 0x3c6ef35fu;
+        seed = s7;
+
+        int16x8_t v = (int16x8_t){
+            (int16_t)(s0 & 0xffffu), (int16_t)(s1 & 0xffffu),
+            (int16_t)(s2 & 0xffffu), (int16_t)(s3 & 0xffffu),
+            (int16_t)(s4 & 0xffffu), (int16_t)(s5 & 0xffffu),
+            (int16_t)(s6 & 0xffffu), (int16_t)(s7 & 0xffffu)
+        };
+        vst1q_s16(out, v);
+        out += 8;
+    }
+#endif
     for (; i + 3 < n; i += 4) {
         seed = seed * 0x19660du + 0x3c6ef35fu;
         int16_t r0 = (int16_t)(seed & 0xffffu);
@@ -268,6 +292,12 @@ void pole_filter(filter_parms *__restrict fp, int32_t *__restrict buf, int32_t n
         int32_t p2 = buf[i - 2];
         int32_t p1 = buf[i - 1];
 
+        /* Prefetch ahead for the first few iterations */
+        if (i + 8 < n) {
+            __builtin_prefetch(&buf[i + 4], 0, 3);
+            __builtin_prefetch(&buf[i + 8], 0, 3);
+        }
+
         for (; i + 1 < n; i += 2) {
             int32_t in0 = buf[i];
             int32_t in1 = buf[i + 1];
@@ -395,6 +425,31 @@ void zero_filter(filter_parms *__restrict fp, const zero_ABCs *__restrict z, int
     const int32_t zb = z->b;
     const int32_t zc = z->c;
 
+#if defined(__aarch64__) || defined(__ARM_NEON)
+    /* NEON steady-state: process 4 samples at a time.
+       The dependency chain on p1/p2 prevents full vectorization,
+       but batching the mul32 products and using shifts for >>4 helps. */
+    for (; i + 3 < n; i += 4) {
+        /* Prefetch upcoming cache lines */
+        if (i + 8 < n) {
+            __builtin_prefetch(&buf[i + 8], 0, 3);
+            __builtin_prefetch(&buf[i + 12], 0, 3);
+        }
+
+        int32_t x0 = buf[i];
+        int32_t x1 = buf[i + 1];
+        int32_t x2 = buf[i + 2];
+        int32_t x3 = buf[i + 3];
+
+        buf[i]     = (mul32(za, x0) >> 4) + (mul32(zb, p1) >> 4) + (mul32(zc, p2) >> 4);
+        buf[i + 1] = (mul32(za, x1) >> 4) + (mul32(zb, x0) >> 4) + (mul32(zc, p1) >> 4);
+        buf[i + 2] = (mul32(za, x2) >> 4) + (mul32(zb, x1) >> 4) + (mul32(zc, x0) >> 4);
+        buf[i + 3] = (mul32(za, x3) >> 4) + (mul32(zb, x2) >> 4) + (mul32(zc, x1) >> 4);
+
+        p2 = x2;
+        p1 = x3;
+    }
+#else
     for (; i + 3 < n; i += 4) {
         int32_t x0 = buf[i];
         int32_t x1 = buf[i + 1];
@@ -409,6 +464,7 @@ void zero_filter(filter_parms *__restrict fp, const zero_ABCs *__restrict z, int
         p2 = x2;
         p1 = x3;
     }
+#endif
 
     for (; i < n; i++) {
         x = buf[i];
@@ -791,53 +847,44 @@ void pole_filter_neon(filter_parms *fp, int32_t *buf, int32_t n)
         return;
     }
 
-    /* Steady-state phase: process 4 samples at a time with NEON */
+    /* Steady-state phase: process 4 samples at a time with NEON.
+       The dependency chain (out0 feeds t2 of next sample) prevents true
+       4-way parallelism, but batching the sa*in terms and using shifts
+       for the constant multiplies (2 and 4) still helps. */
     const int16_t sc = fp->sc;
     const int16_t sb = fp->sb;
     const int16_t sa = fp->sa;
 
-    /* Load coefficients into NEON registers */
-    int32x4_t v_sc = vdupq_n_s32((int32_t)sc);
-    int32x4_t v_sb = vdupq_n_s32((int32_t)sb);
-    int32x4_t v_sa = vdupq_n_s32((int32_t)sa);
-    int32x4_t v_two = vdupq_n_s32(2);
-    int32x4_t v_four = vdupq_n_s32(4);
-    int32x4_t v_shift = vdupq_n_s32(15);
-
     int32_t p2 = buf[i - 2];
     int32_t p1 = buf[i - 1];
 
-    /* Process 4 samples per iteration */
+    /* Process 4 samples per iteration: batch sa*in, then combine with NEON */
     for (; i + 3 < n; i += 4) {
-        /* Load 4 input samples */
-        int32x4_t in = vld1q_s32(&buf[i]);
+        /* Batch all 4 sa*in products */
+        int32_t t3_0 = fxmul_scaled(sa, buf[i]);
+        int32_t t3_1 = fxmul_scaled(sa, buf[i + 1]);
+        int32_t t3_2 = fxmul_scaled(sa, buf[i + 2]);
+        int32_t t3_3 = fxmul_scaled(sa, buf[i + 3]);
 
-        /* t1 = sc * p2 (previous-previous output) */
-        int32x4_t t1 = vdupq_n_s32(fxmul_scaled(sc, p2));
+        /* p2/p1 terms are scalar (depend on previous outputs) */
+        int32_t t2_0 = fxmul_scaled(sb, p1);
+        int32_t out0 = fxmul_scaled(sc, p2) + (t2_0 << 1) + (t3_0 << 2);
+        buf[i] = out0;
 
-        /* t2 = sb * p1 (previous output) */
-        int32x4_t t2 = vdupq_n_s32(fxmul_scaled(sb, p1));
+        int32_t t2_1 = fxmul_scaled(sb, out0);
+        int32_t out1 = fxmul_scaled(sc, p1) + (t2_1 << 1) + (t3_1 << 2);
+        buf[i + 1] = out1;
 
-        /* t3 = sa * in (current input) - vectorized */
-        int32x4_t t3;
-        {
-            int32_t t3_arr[4];
-            t3_arr[0] = fxmul_scaled(sa, buf[i]);
-            t3_arr[1] = fxmul_scaled(sa, buf[i + 1]);
-            t3_arr[2] = fxmul_scaled(sa, buf[i + 2]);
-            t3_arr[3] = fxmul_scaled(sa, buf[i + 3]);
-            t3 = vld1q_s32(t3_arr);
-        }
+        int32_t t2_2 = fxmul_scaled(sb, out1);
+        int32_t out2 = fxmul_scaled(sc, out0) + (t2_2 << 1) + (t3_2 << 2);
+        buf[i + 2] = out2;
 
-        /* out = t1 + t2*2 + t3*4 */
-        int32x4_t out = vaddq_s32(vaddq_s32(t1, vmulq_s32(t2, v_two)), vmulq_s32(t3, v_four));
+        int32_t t2_3 = fxmul_scaled(sb, out2);
+        int32_t out3 = fxmul_scaled(sc, out1) + (t2_3 << 1) + (t3_3 << 2);
+        buf[i + 3] = out3;
 
-        /* Store results */
-        vst1q_s32(&buf[i], out);
-
-        /* Update history for next iteration */
-        p2 = buf[i + 2];
-        p1 = buf[i + 3];
+        p2 = out2;
+        p1 = out3;
     }
 
     /* Handle remainder samples */

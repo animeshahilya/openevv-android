@@ -126,14 +126,14 @@ EVV_INLINE void clr_vector(int32_t *v, int32_t n)
     memset(v, 0, (size_t)n * sizeof(int32_t));
 }
 #endif
-uint32_t klatt_rand(int16_t *out, int32_t n, uint32_t seed);
-void     klatt_shape_noise(int16_t *buf, int32_t n, int32_t rate, double *z);
+uint32_t klatt_rand(int16_t *out, int32_t n, uint32_t seed) EVV_HOT;
+void     klatt_shape_noise(int16_t *buf, int32_t n, int32_t rate, double *z) EVV_HOT;
 void     klatt_wide_enable(int32_t rate);
 int      klatt_wide_on(void);
-int16_t  fxdivl(int32_t num, int32_t den);
+int16_t  fxdivl(int32_t num, int32_t den) EVV_HOT;
 void fxmul_vector(const int32_t *__restrict src, int16_t coef, int32_t *__restrict acc, int32_t n) EVV_HOT;
 void fxmul1_vector(const int16_t *__restrict src, int16_t coef, int32_t *__restrict acc, int32_t n) EVV_HOT;
-int32_t  db2lin(int32_t db);
+int32_t  db2lin(int32_t db) EVV_HOT;
 int      verifyKlattHandle(void *handle);
 
 /* One resonator's working state. The synthesizer state block holds 21 of

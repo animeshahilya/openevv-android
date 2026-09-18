@@ -132,14 +132,21 @@ uint32_t noise(klatt_state *k, uint32_t seed)
 
     for (j = 0; j < k->smooth_span / 2; j++) {
 #if defined(__aarch64__) || defined(__ARM_NEON)
-        /* NEON-optimized: process 8 samples at a time */
+        /* NEON-optimized: process 16 samples at a time with two 8-wide loads */
         int32_t span_len = limit - i;
-        if (span_len >= 8) {
-            int16x8_t v_half = vdupq_n_s16(0x4000);  /* 0.5 in Q14 */
+        if (span_len >= 16) {
+            for (; i + 15 < limit; i += 16) {
+                int16x8_t v0 = vld1q_s16(&k->noise_buf[i]);
+                int16x8_t v1 = vld1q_s16(&k->noise_buf[i + 8]);
+                v0 = vshrq_n_s16(v0, 1);
+                v1 = vshrq_n_s16(v1, 1);
+                vst1q_s16(&k->noise_buf[i], v0);
+                vst1q_s16(&k->noise_buf[i + 8], v1);
+            }
+        } else if (span_len >= 8) {
             for (; i + 7 < limit; i += 8) {
                 int16x8_t v_buf = vld1q_s16(&k->noise_buf[i]);
-                int16x8_t v_res = vshrq_n_s16(v_buf, 1);  /* divide by 2 */
-                vst1q_s16(&k->noise_buf[i], v_res);
+                vst1q_s16(&k->noise_buf[i], vshrq_n_s16(v_buf, 1));
             }
         }
 #endif
@@ -199,7 +206,6 @@ void output_speech(klatt_state *k, int32_t n)
                     vshrn_n_s64(prod_lo, 16),
                     vshrn_n_s64(prod_hi, 16)
                 );
-                /* Approximate division by 100 using multiply-shift (0x889/65536 ≈ 1/100) */
                 res = vmulq_s32(res, vdupq_n_s32(0x889));
                 vst1q_s32(&k->out[i], vshrq_n_s32(res, 16));
             }

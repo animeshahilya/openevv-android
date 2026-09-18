@@ -93,7 +93,12 @@ static void glottal_pulse(klatt_state *k, int32_t at, int32_t count,
     };
 
     if (period <= 256) {
-        /* Use table lookup for fast path */
+        /* Use table lookup for fast path.
+           Prefetch the parabolic table and output buffer. */
+#if defined(__aarch64__) || defined(__ARM_NEON)
+        __builtin_prefetch(parabolic_table, 0, 3);
+        __builtin_prefetch(parabolic_table + 64, 0, 3);
+#endif
         for (i = at; i < at + count; i++) {
             int16_t frac = parabolic_table[((i - at) * 255) / period];
             int32_t v = ((int32_t)frac * (0x5555 - frac)) >> 15;
