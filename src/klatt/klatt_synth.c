@@ -149,6 +149,7 @@ static void set_coefficients(filter_parms *fp, int16_t ex, int16_t co)
     fp->unknown_08 = 1;
 }
 
+EVV_HOT
 int KlattSynth(void *handle, const int32_t *parms)
 {
     klatt_state *k = handle;

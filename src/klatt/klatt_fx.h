@@ -9,9 +9,17 @@
 /* imull keeps the low 32 bits and lets the rest go. Signed overflow is
    undefined in C, so wrap in unsigned and reinterpret to get the same bits. */
 #if defined(__GNUC__) || defined(__clang__)
-#define EVV_INLINE static inline __attribute__((always_inline))
+#define EVV_LIKELY(x)   __builtin_expect(!!(x), 1)
+#define EVV_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#define EVV_INLINE static inline __attribute__((always_inline, flatten))
+#define EVV_HOT __attribute__((hot))
+#define EVV_COLD __attribute__((cold))
 #else
+#define EVV_LIKELY(x)   (x)
+#define EVV_UNLIKELY(x) (x)
 #define EVV_INLINE static inline
+#define EVV_HOT
+#define EVV_COLD
 #endif
 
 EVV_INLINE int32_t mul32(int32_t a, int32_t b)
@@ -110,8 +118,8 @@ void     klatt_shape_noise(int16_t *buf, int32_t n, int32_t rate, double *z);
 void     klatt_wide_enable(int32_t rate);
 int      klatt_wide_on(void);
 int16_t  fxdivl(int32_t num, int32_t den);
-void fxmul_vector(const int32_t *__restrict src, int16_t coef, int32_t *__restrict acc, int32_t n);
-void fxmul1_vector(const int16_t *__restrict src, int16_t coef, int32_t *__restrict acc, int32_t n);
+void fxmul_vector(const int32_t *__restrict src, int16_t coef, int32_t *__restrict acc, int32_t n) EVV_HOT;
+void fxmul1_vector(const int16_t *__restrict src, int16_t coef, int32_t *__restrict acc, int32_t n) EVV_HOT;
 int32_t  db2lin(int32_t db);
 int      verifyKlattHandle(void *handle);
 
@@ -160,15 +168,15 @@ typedef struct {
     int16_t c;
 } zero_ABCs;
 
-void zero_filter(filter_parms *__restrict fp, const zero_ABCs *__restrict z, int32_t *__restrict buf, int32_t n);
+void zero_filter(filter_parms *__restrict fp, const zero_ABCs *__restrict z, int32_t *__restrict buf, int32_t n) EVV_HOT;
 
 /* buf must have two writable samples before it: the resonator seeds its own
    history there and reads them back as y[n-1] and y[n-2]. */
-void pole_filter(filter_parms *__restrict fp, int32_t *__restrict buf, int32_t n);
-void parallel0_filter(filter_parms *__restrict fp, int32_t *__restrict buf, int32_t n);
+void pole_filter(filter_parms *__restrict fp, int32_t *__restrict buf, int32_t n) EVV_HOT;
+void parallel0_filter(filter_parms *__restrict fp, int32_t *__restrict buf, int32_t n) EVV_HOT;
 
 #if defined(__aarch64__) || defined(__ARM_NEON)
-void pole_filter_neon(filter_parms *__restrict fp, int32_t *__restrict buf, int32_t n);
+void pole_filter_neon(filter_parms *__restrict fp, int32_t *__restrict buf, int32_t n) EVV_HOT;
 #endif
 
 extern const char KlattVersionString[];

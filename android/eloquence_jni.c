@@ -758,14 +758,20 @@ static int evn_load_dict_file(ECIHand h, ECIDictHand dict, int volume, const cha
         if (strlen(key) == 0 || strlen(say) == 0)
             continue;
 
-        char *pair = malloc(strlen(key) + strlen(say) + 2);
+        /* Optimized: stack allocation for small pairs */
+        size_t klen = strlen(key);
+        size_t slen = strlen(say);
+        char stack_pair[256];
+        char *pair = (klen + slen + 2 <= 256) ? stack_pair
+                                               : malloc(klen + slen + 2);
         if (!pair)
             continue;
-        memcpy(pair, key, strlen(key) + 1);
-        memcpy(pair + strlen(key) + 1, say, strlen(say) + 1);
+        memcpy(pair, key, klen + 1);
+        memcpy(pair + klen + 1, say, slen + 1);
 
-        int rc = eciUpdateDict(h, dict, volume, pair, pair + strlen(key) + 1);
-        free(pair);
+        int rc = eciUpdateDict(h, dict, volume, pair, pair + klen + 1);
+        if (pair != stack_pair)
+            free(pair);
         if (rc == 0)
             taught++;
         else

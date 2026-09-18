@@ -569,6 +569,7 @@ int dlang_new(DeltaThis *d)
 
    The frame starts at the defaults, is then overwritten by the assignment
    table, and only then by the caller's pairs. */
+EVV_HOT
 int callSynthesizeArray(DeltaThis *d, Cell *rate, Cell *c2, Cell *c3,
                         Cell *c4, Cell *c5, Cell *c6, Cell *c7, Cell *c8,
                         Cell *c9, Cell *c10, Cell *c11, Cell *c12, Cell *c13,
@@ -860,6 +861,7 @@ static int ensureRateTables(DeltaLang *lang, int32_t rate)
    The work itself is two calls. The first sends the parameters with nothing
    asked of them, which is how the engine finds out how long the result will
    be; the second sends them again and lets the samples come. */
+EVV_HOT
 int synthesize(DeltaThis *d, void *buf, int32_t isArray, int32_t *streamA,
                int32_t *streamB, int32_t from, int32_t to, int32_t more,
                int32_t a5, int32_t rate, int32_t a7, int32_t nFormants,

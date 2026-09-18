@@ -29,6 +29,12 @@
 #include "evv_land.h"
 #include "evv_arena.h"
 
+#if defined(__GNUC__) || defined(__clang__)
+#define EVV_HOT __attribute__((hot))
+#else
+#define EVV_HOT
+#endif
+
 /* Every table below belongs to a language, and which language is what the
    machine says. delta_run_rule sets it from the machine it was handed and
    puts back what was there, so everything under it -- the interpreter, a
@@ -1171,6 +1177,7 @@ static long delta_rule_limit;
 
 /* Every call a rule makes, from the interpreter and from a rule written as C
    alike, so that a run says the same thing about itself either way. */
+EVV_HOT
 int32_t delta_rule_called(int which, const int32_t *stack, int argn, int want)
 {
     int32_t a[MAXARG];
@@ -1206,6 +1213,7 @@ int32_t delta_rule_called(int which, const int32_t *stack, int argn, int want)
    own pushes must stay untouched, because nothing pops them and the call after
    this one reads down through them. Arguments here are in the order the entry
    takes them, not the order a machine would have pushed them. */
+EVV_HOT
 int32_t delta_rule_direct(int which, const int32_t *a, int n)
 {
     if (delta_rule_trace > 1) {
@@ -1358,6 +1366,7 @@ static delta_rule_cfn delta_native_walk(const delta_language *lang, int n)
 /* How deep the rules are, so the outermost can be told from the rest. */
 static __thread int delta_rule_depth;
 
+EVV_HOT
 int32_t delta_run_rule(void *state, const delta_rule *r, const int32_t *args,
                        int nargs)
 {

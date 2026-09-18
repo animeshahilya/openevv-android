@@ -21,6 +21,12 @@
 #include "klatt_rates.h"
 #include "delta.h"
 
+#if defined(__GNUC__) || defined(__clang__)
+#define EVV_HOT __attribute__((hot))
+#else
+#define EVV_HOT
+#endif
+
 #define APP_INDEX_LOST     0x06
 #define APP_SPEAKING_DONE  0x07
 
@@ -439,6 +445,7 @@ THIS int32_t stw_registerCallback(SynthThread *t, void *inst, void *cb,
  * counts, and the counts have to agree or every index mark lands in the
  * wrong place. */
 /* Optimized: fast path for ASCII-only text avoids allocation and copying */
+EVV_HOT
 THIS void stw_addTextToEngine(SynthThread *t, char *text, int32_t len)
 {
     if (len <= 0)
@@ -501,6 +508,7 @@ THIS void stw_addTextToEngine(SynthThread *t, char *text, int32_t len)
 
 /* Everything the romanizer is still holding, pushed through whether or not
    it makes a whole sentence, and the engine told there is no more coming. */
+EVV_HOT
 THIS void stw_processRemaining(SynthThread *t)
 {
     char *left = 0;
@@ -524,6 +532,7 @@ THIS void stw_processRemaining(SynthThread *t)
 /* The engine has finished with some characters. Wind the counts back by that
    many and hand over any mark whose time has come, exactly as the word
    callback does; the two differ only in where the count comes from. */
+EVV_HOT
 THIS void stw_removeCharsFromEngine(SynthThread *t, int32_t n)
 {
     int done = 0;

@@ -110,6 +110,7 @@ static double *shaper_state(const klatt_state *k, int stream)
    The shaping goes between the two: it belongs to the source, and running it
    after the envelope would smear the envelope instead. Above 11,025 only,
    so nothing the gate records can move. */
+EVV_HOT
 uint32_t noise(klatt_state *k, uint32_t seed)
 {
     int32_t i, limit, j;
@@ -157,6 +158,7 @@ void compute_voicing_size(klatt_state *k)
     k->closed_part = k->closed_len;
 }
 
+EVV_HOT
 void output_speech(klatt_state *k, int32_t n)
 {
     KlattSamplesStruct s;

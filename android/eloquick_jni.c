@@ -775,7 +775,10 @@ Java_com_eloquick_tts_EloQuickEngine_nativeDictTeach(JNIEnv *env, jclass cls,
     }
     kn = strlen(k);
     sn = strlen(s);
-    pair = (char *)malloc(kn + sn + 2);
+    /* Optimized: stack allocation for small pairs */
+    char stack_pair[256];
+    char *pair = (kn + sn + 2 <= 256) ? stack_pair
+                                       : (char *)malloc(kn + sn + 2);
     if (!pair) {
         (*env)->ReleaseStringUTFChars(env, key, k);
         (*env)->ReleaseStringUTFChars(env, say, s);
@@ -784,7 +787,8 @@ Java_com_eloquick_tts_EloQuickEngine_nativeDictTeach(JNIEnv *env, jclass cls,
     memcpy(pair, k, kn + 1);
     memcpy(pair + kn + 1, s, sn + 1);
     answer = eciUpdateDict(h, dict, (int)volume, pair, pair + kn + 1);
-    free(pair);
+    if (pair != stack_pair)
+        free(pair);
     (*env)->ReleaseStringUTFChars(env, key, k);
     (*env)->ReleaseStringUTFChars(env, say, s);
     return (jint)answer;
@@ -1369,10 +1373,15 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamSpeakWithMarks(JNIEnv *env,
         (*env)->ReleaseStringUTFChars(env, text, utf8);
         return JNI_FALSE;
     }
-    buf = (unsigned char *)malloc(n + 1);
-    if (!buf) {
-        (*env)->ReleaseStringUTFChars(env, text, utf8);
-        return JNI_FALSE;
+    /* Optimized: reuse existing text buffer if large enough */
+    if (s->text && strlen((char *)s->text) >= n) {
+        buf = s->text;
+    } else {
+        buf = (unsigned char *)malloc(n + 1);
+        if (!buf) {
+            (*env)->ReleaseStringUTFChars(env, text, utf8);
+            return JNI_FALSE;
+        }
     }
     memcpy(buf, utf8, n + 1);
     (*env)->ReleaseStringUTFChars(env, text, utf8);
@@ -1828,7 +1837,10 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamDictTeach(JNIEnv *env, jclass c
     }
     kn = strlen(k);
     sn = strlen(s_say);
-    pair = (char *)malloc(kn + sn + 2);
+    /* Optimized: stack allocation for small pairs */
+    char stack_pair[256];
+    char *pair = (kn + sn + 2 <= 256) ? stack_pair
+                                       : (char *)malloc(kn + sn + 2);
     if (!pair) {
         (*env)->ReleaseStringUTFChars(env, key, k);
         (*env)->ReleaseStringUTFChars(env, say, s_say);
@@ -1837,7 +1849,8 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamDictTeach(JNIEnv *env, jclass c
     memcpy(pair, k, kn + 1);
     memcpy(pair + kn + 1, s_say, sn + 1);
     answer = eciUpdateDict(s->handle, dict, (int)volume, pair, pair + kn + 1);
-    free(pair);
+    if (pair != stack_pair)
+        free(pair);
     (*env)->ReleaseStringUTFChars(env, key, k);
     (*env)->ReleaseStringUTFChars(env, say, s_say);
     return (jint)answer;
@@ -2269,7 +2282,8 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamDictLoadFile(JNIEnv *env, jclas
     (*env)->ReleaseStringUTFChars(env, path, cpath);
     if (!buf) return -1;
 
-    /* Parse line by line: key\tpronunciation */
+    /* Parse line by line: key\tpronunciation
+     * Optimized: stack-allocated buffer for small entries, single malloc for large */
     char *line = buf;
     while (*line) {
         char *eol;
@@ -2292,8 +2306,11 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamDictLoadFile(JNIEnv *env, jclas
             size_t klen = (size_t)(tab - line);
             size_t slen = (size_t)(eol - tab - 1);
             /* Build a key\0say pair for eciAddText annotation:
-               `dkey\0say` -- but we add them via the annotation path. */
-            char *pair = (char *)malloc(klen + slen + 2);
+               `dkey\0say` -- but we add them via the annotation path.
+               Optimized: use stack buffer for entries <= 256 bytes total. */
+            char stack_pair[256];
+            char *pair = (klen + slen + 2 <= 256) ? stack_pair
+                                                   : (char *)malloc(klen + slen + 2);
             if (pair) {
                 memcpy(pair, line, klen);
                 pair[klen] = '\0';
@@ -2303,7 +2320,8 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamDictLoadFile(JNIEnv *env, jclas
                    The `d annotation adds to the user dictionary. */
                 eciAddText(s->handle, "`d");
                 eciAddText(s->handle, pair);
-                free(pair);
+                if (pair != stack_pair)
+                    free(pair);
                 count++;
             }
         }

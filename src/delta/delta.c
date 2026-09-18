@@ -10,6 +10,14 @@
 #include "evv_arena.h"
 #include "eci_eloqc.h"
 
+#if defined(__GNUC__) || defined(__clang__)
+#define EVV_LIKELY(x)   __builtin_expect(!!(x), 1)
+#define EVV_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+#define EVV_LIKELY(x)   (x)
+#define EVV_UNLIKELY(x) (x)
+#endif
+
 #define AT(field, offset) \
     typedef char field##_at_##offset[offsetof(delta_state, field) == offset ? 1 : -1]
 #define AT_VARS(field, offset) \
@@ -95,7 +103,7 @@ typedef char delta_fielddesc_is_0x18[sizeof(delta_fielddesc) == 0x18 ? 1 : -1];
 #define EVV_WALK_MAX  200000
 
 #define EVV_WALK(n)        int32_t n = EVV_WALK_MAX
-#define EVV_WALKED(d, n)   do { if (--(n) < 0) forceErrorBacktrack(d); } while (0)
+#define EVV_WALKED(d, n)   do { if (EVV_UNLIKELY(--(n) < 0)) forceErrorBacktrack(d); } while (0)
 
 /* How long a language-declared record is. Two of the callers can arrive with
    a negative kind, which the original indexes the table with regardless, so

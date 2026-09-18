@@ -340,6 +340,7 @@ static int32_t valueSetValue(delta_state *d, ValueSet *vs, int8_t stream,
 }
 
 /* Walk the run a step at a time, building a frame and handing it over. */
+EVV_HOT
 int32_t sendStreamParameters(delta_state *d, int32_t start, int32_t unused,
                              int32_t end, int32_t continuing, int32_t a,
                              int32_t b, int32_t c, int32_t step,

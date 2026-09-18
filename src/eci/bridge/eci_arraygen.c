@@ -230,9 +230,9 @@ void dlangCleanup(delta_state *d)
     }
 }
 
-/* Walk the window a step at a time, building a frame at each step and
-   handing it to the synthesiser. Answers false if the synthesiser stopped,
-   the caller interrupted, or the window ran out. */
+The frame starts at the defaults, is then overwritten by the
+   assignment table, and only then by the caller's pairs. */
+EVV_HOT
 int32_t sendArrayParameters(delta_state *d, int32_t from, int32_t to,
                             int32_t bounded, int32_t continuing,
                             int32_t exact, int32_t unused,
