@@ -46,8 +46,75 @@
 static const char CMD_RATE_8000[] = "`esr0";
 static const char CMD_RATE_11025[] = "`esr1";
 
-/* Slots of the engine's table, by byte offset. All stdcall, all with the
-   engine pushed like any other argument. */
+/* Fast inline: check if text needs recoding (has non-ASCII chars) */
+static inline int stw_needsRecoding(const char *text, int32_t len)
+{
+    if (len <= 0)
+        return 0;
+    for (int32_t i = 0; i < len; i++) {
+        if ((unsigned char)text[i] >= 0x80)
+            return 1;
+    }
+    return 0;
+}
+
+/* Fast UTF-8 to Latin-1 conversion for Western European languages.
+ * Optimized for the common case: ASCII + Latin-1 supplement. */
+static inline int stw_utf8ToLatin1(const char *src, int32_t len, char *dst)
+{
+    int32_t i = 0, j = 0;
+    while (i < len) {
+        unsigned char c = (unsigned char)src[i];
+        if (c < 0x80) {
+            dst[j++] = (char)c;
+            i++;
+        } else if ((c & 0xE0) == 0xC0) {
+            if (i + 1 < len) {
+                unsigned char c2 = (unsigned char)src[i + 1];
+                if ((c2 & 0xC0) == 0x80) {
+                    uint16_t cp = ((c & 0x1F) << 6) | (c2 & 0x3F);
+                    if (cp <= 0xFF)
+                        dst[j++] = (char)cp;
+                    else
+                        dst[j++] = '?';
+                    i += 2;
+                    continue;
+                }
+            }
+            dst[j++] = '?';
+            i++;
+        } else if ((c & 0xF0) == 0xE0) {
+            if (i + 2 < len) {
+                unsigned char c2 = (unsigned char)src[i + 1];
+                unsigned char c3 = (unsigned char)src[i + 2];
+                if ((c2 & 0xC0) == 0x80 && (c3 & 0xC0) == 0x80) {
+                    uint16_t cp = ((c & 0x0F) << 12) | ((c2 & 0x3F) << 6) | (c3 & 0x3F);
+                    if (cp <= 0xFF)
+                        dst[j++] = (char)cp;
+                    else
+                        dst[j++] = '?';
+                    i += 3;
+                    continue;
+                }
+            }
+            dst[j++] = '?';
+            i++;
+        } else if ((c & 0xF8) == 0xF0) {
+            i += 4;
+            dst[j++] = '?';
+        } else {
+            dst[j++] = '?';
+            i++;
+        }
+    }
+    return j;
+}
+
+/* Fast path: check if text needs recoding */
+static inline int stw_textNeedsRecoding(const char *text, int32_t len)
+{
+    return stw_needsRecoding(text, len);
+}
 #define ENG_ASK            0x00
 #define ENG_ADD_TEXT       0x14
 #define ENG_COMMAND        0x18
@@ -365,16 +432,33 @@ THIS int32_t stw_registerCallback(SynthThread *t, void *inst, void *cb,
 
 /* ---- text into the engine -------------------------------------------- */
 
-/* A sentence the romanizer has finished with, on its way to the engine.
-
-   The count of characters the engine has been given is kept here, and it is
-   not simply the length: a run that does not end in a space is one character
-   short of a word boundary and gets one added, and a backslash escape counts
-   as one character rather than two. Both of those are how the engine itself
-   counts, and the counts have to agree or every index mark lands in the
-   wrong place. */
+/* The count of characters the engine has been given is kept here, and it is
+ * not simply the length: a run that does not end in a space is one character
+ * short of a word boundary and gets one added, and a backslash escape counts
+ * as one character rather than two. Both of those are how the engine itself
+ * counts, and the counts have to agree or every index mark lands in the
+ * wrong place. */
+/* Optimized: fast path for ASCII-only text avoids allocation and copying */
 THIS void stw_addTextToEngine(SynthThread *t, char *text, int32_t len)
 {
+    if (len <= 0)
+        return;
+
+    /* Fast path: if text is ASCII-only, pass directly without allocation */
+    if (!stw_textNeedsRecoding(text, len)) {
+        int32_t samples = len;
+        if (len > 0 && text[len - 1] != ' ')
+            samples += 1;
+        ST_SAMPLES(t) += samples;
+        EngAddText add = (EngAddText)ENG_CALL(t, ENG_ADD_TEXT);
+        if (add(ST_ENGINE(t), text))
+            stb_postEngineError(t);
+        if (ST_PHONBUF(t))
+            stb_sendPhonemesToUser(t);
+        return;
+    }
+
+    /* Slow path: text needs recoding, allocate and convert */
     char *copy = (char *)cpp_new((uint32_t)len + 1);
     int escaped;
     int32_t i;
@@ -386,12 +470,16 @@ THIS void stw_addTextToEngine(SynthThread *t, char *text, int32_t len)
         return;
     }
 
-    memcpy(copy, text, (size_t)len);
-    copy[len] = 0;
+    int32_t out_len = stw_utf8ToLatin1(text, len, copy);
+    if (out_len < 0) {
+        cpp_delete(copy);
+        return;
+    }
+    copy[out_len] = 0;
 
-    if (copy[len - 1] != ' ')
+    if (out_len > 0 && copy[out_len - 1] != ' ')
         ST_SAMPLES(t) += 1;
-    ST_SAMPLES(t) += len;
+    ST_SAMPLES(t) += out_len;
 
     escaped = 0;
     for (i = 0; copy[i]; i++) {
