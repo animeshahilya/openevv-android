@@ -87,7 +87,15 @@ set(OPENEVV_MODERN_COMPILE_OPTIONS
 
 # Optimization flags
 if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
-    set(OPENEVV_OPT_COMPILE_OPTIONS -O3 -fomit-frame-pointer)
+    set(OPENEVV_OPT_COMPILE_OPTIONS -O3 -fomit-frame-pointer
+        -fstrict-aliasing
+        -fstrict-overflow
+        -fmerge-all-constants
+        -fno-semantic-interposition
+        -fno-trapping-math
+        -ffp-contract=fast
+        -fno-math-errno
+    )
 elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(OPENEVV_OPT_COMPILE_OPTIONS -O0 -g -DDEBUG=1)
 elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")

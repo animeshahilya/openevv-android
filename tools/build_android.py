@@ -445,6 +445,11 @@ def build_abi(
             "-fno-math-errno",
             "-fno-trapping-math",
             "-ffp-contract=fast",
+            "-fstrict-aliasing",
+            "-fstrict-overflow",
+            "-fmerge-all-constants",
+            "-fno-semantic-interposition",
+            "-fno-trapping-math",
             "-DNDEBUG",
         ]
         strip = not no_strip
@@ -456,6 +461,11 @@ def build_abi(
             "-fno-math-errno",
             "-fno-trapping-math",
             "-ffp-contract=fast",
+            "-fstrict-aliasing",
+            "-fstrict-overflow",
+            "-fmerge-all-constants",
+            "-fno-semantic-interposition",
+            "-fno-trapping-math",
         ]
         strip = not no_strip
     else:
@@ -466,6 +476,11 @@ def build_abi(
             "-fno-math-errno",
             "-fno-trapping-math",
             "-ffp-contract=fast",
+            "-fstrict-aliasing",
+            "-fstrict-overflow",
+            "-fmerge-all-constants",
+            "-fno-semantic-interposition",
+            "-fno-trapping-math",
         ]
         strip = not no_strip
 
@@ -523,6 +538,13 @@ def build_abi(
         "-fdata-sections",
         "-fvisibility=hidden",
         "-fPIC",
+        "-fstrict-aliasing",
+        "-fstrict-overflow",
+        "-fmerge-all-constants",
+        "-fno-semantic-interposition",
+        "-fno-trapping-math",
+        "-fno-math-errno",
+        "-ffp-contract=fast",
     ] + opt_cflags + inc_flags + rom_defs
 
     header_floor = newest_header_mtime()
