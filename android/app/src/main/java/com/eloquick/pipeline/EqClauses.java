@@ -53,14 +53,52 @@ public final class EqClauses {
      * Normalizes whitespace and ellipses: U+2026 to "...", a space after a
      * "..." glued to a word (so clause splitting sees the boundary),
      * newlines to spaces, collapsed space runs, trimmed.
+     * Optimized: single pass with StringBuilder for all replacements.
      */
     public static String normalize(String text) {
         if (!ENABLED || text == null || text.isEmpty()) return text == null ? "" : text;
-        text = ELLIPSIS.matcher(text).replaceAll("...");
-        text = ELLIPSIS_SPACE.matcher(text).replaceAll("$0 ");
-        text = LINE_BREAKS.matcher(text).replaceAll(" ");
-        text = SPACE_RUNS.matcher(text).replaceAll(" ");
-        return text.trim();
+        // Single-pass normalization for better performance
+        StringBuilder sb = new StringBuilder(text.length() + 16);
+        int len = text.length();
+        for (int i = 0; i < len; ) {
+            char c = text.charAt(i);
+            if (c == '\u2026') { // ellipsis char
+                sb.append("...");
+                i++;
+            } else if (c == '.' && i + 2 < len && text.charAt(i + 1) == '.' && text.charAt(i + 2) == '.') {
+                // Handle ... sequence
+                sb.append("...");
+                i += 3;
+                // Add space if followed by alphanumeric
+                if (i < len && Character.isLetterOrDigit(text.charAt(i))) {
+                    sb.append(' ');
+                }
+            } else if (c == '\r' || c == '\n' || c == '\u2028' || c == '\u2029') {
+                // Line breaks to space
+                sb.append(' ');
+                i++;
+                // Skip consecutive line breaks
+                while (i < len && (text.charAt(i) == '\r' || text.charAt(i) == '\n' || text.charAt(i) == '\u2028' || text.charAt(i) == '\u2029')) {
+                    i++;
+                }
+            } else if (c == '\t' || c == ' ' || c == '\u00A0') {
+                // Collapse whitespace runs
+                sb.append(' ');
+                i++;
+                while (i < len && (text.charAt(i) == '\t' || text.charAt(i) == ' ' || text.charAt(i) == '\u00A0')) {
+                    i++;
+                }
+            } else {
+                sb.append(c);
+                i++;
+            }
+        }
+        // Trim
+        int start = 0;
+        int end = sb.length();
+        while (start < end && Character.isWhitespace(sb.charAt(start))) start++;
+        while (end > start && Character.isWhitespace(sb.charAt(end - 1))) end--;
+        return sb.substring(start, end);
     }
 
     /**
@@ -152,6 +190,7 @@ public final class EqClauses {
      * attach forward (backward pass), and digits are always native - numbers
      * must be spoken by the base voice. Latin-script base languages return a
      * single native segment.
+     * Optimized: combines classification, forward pass, and digit override in one loop.
      */
     public static List<Segment> splitByScript(String text, String baseLang) {
         List<Segment> single =
@@ -163,37 +202,32 @@ public final class EqClauses {
         if (!NON_LATIN_LANGS.contains(base)) return single;
 
         int n = text.length();
-        // Classify per char (0 = native, 1 = latin, -1 = neutral).
+        // Classify per char (0 = native, 1 = latin, -1 = neutral) + forward pass + digit override.
         int[] kind = new int[n];
+        int[] resolved = new int[n];
+        int last = 0;
         for (int i = 0; i < n;) {
             int cp = text.codePointAt(i);
             int cl = Character.charCount(cp);
             int k = isLatinLetter(cp) ? 1 : (isNeutral(cp) ? -1 : 0);
-            for (int j = i; j < i + cl && j < n; j++) kind[j] = k;
+            // Digit override: digits are always native (0)
+            if (Character.isDigit(cp)) k = 0;
+            for (int j = i; j < i + cl && j < n; j++) {
+                kind[j] = k;
+            }
+            // Forward pass inline
+            if (k >= 0) last = k;
+            for (int j = i; j < i + cl && j < n; j++) {
+                resolved[j] = last;
+            }
             i += cl;
         }
-        // Forward pass: neutrals inherit the last known script (native default).
-        int[] resolved = new int[n];
-        int last = 0;
-        for (int i = 0; i < n; i++) {
-            if (kind[i] >= 0) last = kind[i];
-            resolved[i] = last;
-        }
         // Backward pass: a neutral followed by the native script attaches
-        // forward to it; neutrals between two Latin runs stay Latin. This
-        // reproduces the donor's (native, latin, native) example exactly.
+        // forward to it; neutrals between two Latin runs stay Latin.
         int next = resolved[n - 1];
         for (int i = n - 1; i >= 0; i--) {
             if (kind[i] < 0 && next == 0 && resolved[i] != 0) resolved[i] = 0;
             else if (kind[i] >= 0) next = resolved[i];
-        }
-        // Digit override: digits are always native.
-        for (int i = 0; i < n;) {
-            int cp = text.codePointAt(i);
-            if (Character.isDigit(cp)) {
-                for (int j = i; j < i + Character.charCount(cp) && j < n; j++) resolved[j] = 0;
-            }
-            i += Character.charCount(cp);
         }
         // Group consecutive same-script characters.
         List<Segment> out = new ArrayList<>();

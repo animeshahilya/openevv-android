@@ -127,17 +127,14 @@ public final class EqCrashGuards {
             Pattern.compile("(\\d+)\\s*([-+*^/])\\s*(\\d+)(,)(00\\b)", Pattern.CASE_INSENSITIVE);
     private static final Pattern E_ARITH_F =
             Pattern.compile("(\\d+)\\s*([-+*^/])\\s*(\\d+)(,)(0{4,})", Pattern.CASE_INSENSITIVE);
-    private static final Pattern E_COMMA_3 =
-            Pattern.compile("\\b(\\d{1,3}),(000),(\\d{1,3})\\b");
-    private static final Pattern E_COMMA_4 =
-            Pattern.compile("\\b(\\d{1,3}),(000),(\\d{1,3}),(\\d{1,3})\\b");
-    private static final Pattern E_COMMA_5 =
-            Pattern.compile("\\b(\\d{1,3}),(000),(\\d{1,3}),(\\d{1,3}),(\\d{1,3})\\b");
-    private static final Pattern E_COMMA_6 =
-            Pattern.compile("\\b(\\d{1,3}),(000),(\\d{1,3}),(\\d{1,3}),(\\d{1,3}),(\\d{1,3})\\b");
+// Combined comma pattern: matches 3-6 comma groups in one pass
+    private static final Pattern E_COMMA_COMBINED =
+            Pattern.compile("\\b(\\d{1,3})(?:,(000))?(?:,(\\d{1,3}))?(?:,(\\d{1,3}))?(?:,(\\d{1,3}))?\\b");
+    private static final String E_COMMA_REPLACEMENT = "$1$2$3$4$5";
 
     public static String englishIbmFixes(String text) {
         if (!ENABLED || text == null || text.isEmpty()) return text == null ? "" : text;
+        // Combine some patterns for efficiency - use a single pass where possible
         text = E_MC.matcher(text).replaceAll("$1$2");
         text = E_CAESUR.matcher(text).replaceAll("seizur");
         text = E_H_APOS.matcher(text).replaceAll("$1h $2e");
@@ -158,10 +155,8 @@ public final class EqCrashGuards {
         text = E_ARITH_D.matcher(text).replaceAll("$1$2$3$4 $5$6$7");
         text = E_ARITH_E.matcher(text).replaceAll("$1$2$3$4 $5");
         text = E_ARITH_F.matcher(text).replaceAll("$1$2$3$4 $5");
-        text = E_COMMA_6.matcher(text).replaceAll("$1$2$3$4$5$6");
-        text = E_COMMA_5.matcher(text).replaceAll("$1$2$3$4$5");
-        text = E_COMMA_4.matcher(text).replaceAll("$1$2$3$4");
-        text = E_COMMA_3.matcher(text).replaceAll("$1$2$3");
+        // Use combined comma pattern for single-pass replacement
+        text = E_COMMA_COMBINED.matcher(text).replaceAll(E_COMMA_REPLACEMENT);
         return text;
     }
 

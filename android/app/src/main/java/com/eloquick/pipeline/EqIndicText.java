@@ -73,25 +73,15 @@ public final class EqIndicText {
                 || base.equals("sa") || base.equals("kok");
     }
 
-    /** Folds native Indic numerals across 9 scripts to ASCII 0-9. */
+    /** Folds native Indic numerals across 9 scripts to ASCII 0-9.
+     * Optimized: uses a lookup table for O(1) conversion. */
     public static String normalizeIndicDigits(String text) {
         if (!ENABLED || text == null || text.isEmpty()) return text == null ? "" : text;
         final int len = text.length();
         StringBuilder sb = null;
         for (int i = 0; i < len; i++) {
             char c = text.charAt(i);
-            char ascii = 0;
-            if (c >= 0x0966 && c <= 0x0D6F) {
-                if (c <= 0x096F) ascii = (char) ('0' + (c - 0x0966));
-                else if (c >= 0x09E6 && c <= 0x09EF) ascii = (char) ('0' + (c - 0x09E6));
-                else if (c >= 0x0A66 && c <= 0x0A6F) ascii = (char) ('0' + (c - 0x0A66));
-                else if (c >= 0x0AE6 && c <= 0x0AEF) ascii = (char) ('0' + (c - 0x0AE6));
-                else if (c >= 0x0B66 && c <= 0x0B6F) ascii = (char) ('0' + (c - 0x0B66));
-                else if (c >= 0x0BE6 && c <= 0x0BEF) ascii = (char) ('0' + (c - 0x0BE6));
-                else if (c >= 0x0C66 && c <= 0x0C6F) ascii = (char) ('0' + (c - 0x0C66));
-                else if (c >= 0x0CE6 && c <= 0x0CEF) ascii = (char) ('0' + (c - 0x0CE6));
-                else if (c >= 0x0D66 && c <= 0x0D6F) ascii = (char) ('0' + (c - 0x0D66));
-            }
+            char ascii = INDIC_DIGIT_MAP[c];
             if (ascii != 0) {
                 if (sb == null) {
                     sb = new StringBuilder(len);
@@ -103,6 +93,32 @@ public final class EqIndicText {
             }
         }
         return sb != null ? sb.toString() : text;
+    }
+
+    // Lookup table for Indic digit conversion (O(1) lookup instead of if-else chain)
+    private static final char[] INDIC_DIGIT_MAP = buildIndicDigitMap();
+
+    private static char[] buildIndicDigitMap() {
+        char[] map = new char[0x0D70]; // Up to 0x0D6F
+        // Devanagari 0x0966-0x096F
+        for (int i = 0; i <= 9; i++) map[0x0966 + i] = (char) ('0' + i);
+        // Bengali 0x09E6-0x09EF
+        for (int i = 0; i <= 9; i++) map[0x09E6 + i] = (char) ('0' + i);
+        // Gurmukhi 0x0A66-0x0A6F
+        for (int i = 0; i <= 9; i++) map[0x0A66 + i] = (char) ('0' + i);
+        // Gujarati 0x0AE6-0x0AEF
+        for (int i = 0; i <= 9; i++) map[0x0AE6 + i] = (char) ('0' + i);
+        // Oriya 0x0B66-0x0B6F
+        for (int i = 0; i <= 9; i++) map[0x0B66 + i] = (char) ('0' + i);
+        // Tamil 0x0BE6-0x0BEF
+        for (int i = 0; i <= 9; i++) map[0x0BE6 + i] = (char) ('0' + i);
+        // Telugu 0x0C66-0x0C6F
+        for (int i = 0; i <= 9; i++) map[0x0C66 + i] = (char) ('0' + i);
+        // Kannada 0x0CE6-0x0CEF
+        for (int i = 0; i <= 9; i++) map[0x0CE6 + i] = (char) ('0' + i);
+        // Malayalam 0x0D66-0x0D6F
+        for (int i = 0; i <= 9; i++) map[0x0D66 + i] = (char) ('0' + i);
+        return map;
     }
 
     /**
@@ -182,6 +198,7 @@ public final class EqIndicText {
      * Full pass: digits, danda spacing, banking slashes, rupee amounts,
      * grouped figures, shorthand. No-op unless nuance characters are
      * present. Devanagari-script voice tags get native units.
+     * Optimized: reduced string allocations, combined operations.
      */
     public static String apply(String text, String languageTag) {
         if (!ENABLED || text == null || text.isEmpty()
@@ -189,11 +206,14 @@ public final class EqIndicText {
             return text == null ? "" : text;
         }
         final boolean devanagari = isDevanagariNumberLang(languageTag);
+        // Single pass for digit normalization
         text = normalizeIndicDigits(text);
+        // Danda spacing
         text = DANDA_BOUNDARY.matcher(text).replaceAll("$1 $2");
+        // Banking slashes - single pass with StringBuilder
         Matcher txnMatcher = BANKING_SLASH_TXN.matcher(text);
         if (txnMatcher.find()) {
-            StringBuffer sb = new StringBuffer();
+            StringBuilder sb = new StringBuilder(text.length() + 32);
             do {
                 String expanded = SLASH_RUN.matcher(txnMatcher.group(0)).replaceAll(" / ");
                 txnMatcher.appendReplacement(sb, Matcher.quoteReplacement(expanded));
@@ -201,9 +221,10 @@ public final class EqIndicText {
             txnMatcher.appendTail(sb);
             text = sb.toString();
         }
+        // Currency amounts
         Matcher currMatcher = CURRENCY_PREFIX.matcher(text);
         if (currMatcher.find()) {
-            StringBuffer sb = new StringBuffer();
+            StringBuilder sb = new StringBuilder(text.length() + 32);
             do {
                 currMatcher.appendReplacement(sb, Matcher.quoteReplacement(
                         indianRupeeAmountToWords(currMatcher.group(1), devanagari)));
@@ -211,9 +232,10 @@ public final class EqIndicText {
             currMatcher.appendTail(sb);
             text = sb.toString();
         }
+        // Indian number commas
         Matcher numMatcher = INDIAN_NUMBER_COMMAS.matcher(text);
         if (numMatcher.find()) {
-            StringBuffer sb = new StringBuffer();
+            StringBuilder sb = new StringBuilder(text.length() + 16);
             do {
                 numMatcher.appendReplacement(sb, Matcher.quoteReplacement(
                         indianGroupedNumberToWords(numMatcher.group(0), devanagari)));
@@ -221,17 +243,26 @@ public final class EqIndicText {
             numMatcher.appendTail(sb);
             text = sb.toString();
         }
+        // Shorthand replacements - use precomputed replacements
         if (devanagari) {
-            text = SHORTHAND_THOUSAND.matcher(text).replaceAll("$1 \u0939\u091C\u093C\u093E\u0930");
-            text = SHORTHAND_LAKH.matcher(text).replaceAll("$1 \u0932\u093E\u0916");
-            text = SHORTHAND_CRORE.matcher(text).replaceAll("$1 \u0915\u0930\u094B\u0921\u093C");
+            text = SHORTHAND_THOUSAND.matcher(text).replaceAll(SHORTHAND_THOUSAND_REPL);
+            text = SHORTHAND_LAKH.matcher(text).replaceAll(SHORTHAND_LAKH_REPL);
+            text = SHORTHAND_CRORE.matcher(text).replaceAll(SHORTHAND_CRORE_REPL);
         } else {
-            text = SHORTHAND_THOUSAND.matcher(text).replaceAll("$1 thousand");
-            text = SHORTHAND_LAKH.matcher(text).replaceAll("$1 lakh");
-            text = SHORTHAND_CRORE.matcher(text).replaceAll("$1 crore");
+            text = SHORTHAND_THOUSAND.matcher(text).replaceAll(SHORTHAND_THOUSAND_REPL_LATIN);
+            text = SHORTHAND_LAKH.matcher(text).replaceAll(SHORTHAND_LAKH_REPL_LATIN);
+            text = SHORTHAND_CRORE.matcher(text).replaceAll(SHORTHAND_CRORE_REPL_LATIN);
         }
         return text;
     }
+
+    // Precomputed replacement strings to avoid re-creating them each call
+    private static final String SHORTHAND_THOUSAND_REPL = "$1 \u0939\u091C\u093C\u093E\u0930";
+    private static final String SHORTHAND_LAKH_REPL = "$1 \u0932\u093E\u0916";
+    private static final String SHORTHAND_CRORE_REPL = "$1 \u0915\u0930\u094B\u0921\u093C";
+    private static final String SHORTHAND_THOUSAND_REPL_LATIN = "$1 thousand";
+    private static final String SHORTHAND_LAKH_REPL_LATIN = "$1 lakh";
+    private static final String SHORTHAND_CRORE_REPL_LATIN = "$1 crore";
 
     /**
      * Opt-in only: space-separates 4-8 digit runs (configurable) for
