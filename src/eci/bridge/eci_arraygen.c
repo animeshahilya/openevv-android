@@ -230,7 +230,7 @@ void dlangCleanup(delta_state *d)
     }
 }
 
-The frame starts at the defaults, is then overwritten by the
+/* The frame starts at the defaults, is then overwritten by the
    assignment table, and only then by the caller's pairs. */
 EVV_HOT
 int32_t sendArrayParameters(delta_state *d, int32_t from, int32_t to,

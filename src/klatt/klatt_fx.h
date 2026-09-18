@@ -96,9 +96,17 @@ EVV_INLINE int32_t fxmul_scaled(int32_t coef, int32_t x)
 
 #include <string.h>
 
+/* clr_vector: NEON-optimized for ARM64, falls back to memset on other platforms */
+#if defined(__GNUC__) || defined(__clang__)
+#define EVV_INLINE static inline __attribute__((always_inline))
+#else
+#define EVV_INLINE static inline
+#endif
+
+#if defined(__aarch64__) || defined(__ARM_NEON)
+#include <arm_neon.h>
 EVV_INLINE void clr_vector(int32_t *v, int32_t n)
 {
-#if defined(__aarch64__) || defined(__ARM_NEON)
     if (n >= 8) {
         int32x4_t zero = vdupq_n_s32(0);
         int32_t i = 0;
@@ -110,9 +118,14 @@ EVV_INLINE void clr_vector(int32_t *v, int32_t n)
             v[i] = 0;
         return;
     }
-#endif
     memset(v, 0, (size_t)n * sizeof(int32_t));
 }
+#else
+EVV_INLINE void clr_vector(int32_t *v, int32_t n)
+{
+    memset(v, 0, (size_t)n * sizeof(int32_t));
+}
+#endif
 uint32_t klatt_rand(int16_t *out, int32_t n, uint32_t seed);
 void     klatt_shape_noise(int16_t *buf, int32_t n, int32_t rate, double *z);
 void     klatt_wide_enable(int32_t rate);

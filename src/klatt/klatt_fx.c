@@ -5,6 +5,10 @@
 #include "klatt_fx.h"
 #include "klatt_tables.h"
 
+#if defined(__aarch64__) || defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
+
 /* The original relies on >> sign-extending negative operands, which C leaves
    implementation-defined. Every compiler we target does this; fail the build
    rather than produce silently wrong audio on one that does not. */
@@ -817,11 +821,12 @@ void pole_filter_neon(filter_parms *fp, int32_t *buf, int32_t n)
         /* t3 = sa * in (current input) - vectorized */
         int32x4_t t3;
         {
-            int32_t t3_0 = fxmul_scaled(sa, buf[i]);
-            int32_t t3_1 = fxmul_scaled(sa, buf[i + 1]);
-            int32_t t3_2 = fxmul_scaled(sa, buf[i + 2]);
-            int32_t t3_3 = fxmul_scaled(sa, buf[i + 3]);
-            t3 = vld1q_s32((int32_t[4]){t3_0, t3_1, t3_2, t3_3});
+            int32_t t3_arr[4];
+            t3_arr[0] = fxmul_scaled(sa, buf[i]);
+            t3_arr[1] = fxmul_scaled(sa, buf[i + 1]);
+            t3_arr[2] = fxmul_scaled(sa, buf[i + 2]);
+            t3_arr[3] = fxmul_scaled(sa, buf[i + 3]);
+            t3 = vld1q_s32(t3_arr);
         }
 
         /* out = t1 + t2*2 + t3*4 */

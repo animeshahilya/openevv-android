@@ -748,7 +748,6 @@ Java_com_eloquick_tts_EloQuickEngine_nativeDictTeach(JNIEnv *env, jclass cls,
     eq_extra *e;
     ECIDictHand dict;
     const char *k, *s;
-    char *pair;
     size_t kn, sn;
     int answer;
     (void)cls;
@@ -1810,7 +1809,6 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamDictTeach(JNIEnv *env, jclass c
     eq_extra *e;
     ECIDictHand dict;
     const char *k, *s_say;
-    char *pair;
     size_t kn, sn;
     int answer;
     (void)cls;
