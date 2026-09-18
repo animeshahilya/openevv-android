@@ -9,6 +9,15 @@
 
 #include "evv_klatttap.h"
 
+#if defined(__aarch64__) || defined(__ARM_NEON)
+#include <arm_neon.h>
+#define PREFETCH_READ(addr) __builtin_prefetch(addr, 0, 3)
+#define PREFETCH_WRITE(addr) __builtin_prefetch(addr, 1, 3)
+#else
+#define PREFETCH_READ(addr) (void)0
+#define PREFETCH_WRITE(addr) (void)0
+#endif
+
 /* Resonator slots in the filter array. Five through twelve are the cascade
    formants and thirteen through twenty their parallel counterparts, which
    share the cascade's frequencies but carry their own bandwidths. */
@@ -34,7 +43,9 @@ enum {
 
 /* One glottal pulse, sample by sample. The shape is a parabola: the fraction
    through the open phase times a third minus that same fraction, which is the
-   published Klatt waveform rather than anything IBM invented. */
+   published Klatt waveform rather than anything IBM invented.
+   Optimized: uses a small lookup table for the parabolic shape to avoid
+   per-sample division and multiplication. */
 static void glottal_pulse(klatt_state *k, int32_t at, int32_t count,
                           int32_t period)
 {
@@ -48,12 +59,56 @@ static void glottal_pulse(klatt_state *k, int32_t at, int32_t count,
 
     slope = fxdivl(mul32(k->pulse_amp, 3), k->cp.sample_rate << 2);
 
-    for (i = at; i < at + count; i++) {
-        int16_t frac = fxdivl(i - at, period);
-        int32_t v = fxmul_scaled(frac, 0x5555 - frac);
+    /* Fast path for common periods: use precomputed parabolic table */
+    static const int16_t parabolic_table[256] = {
+        0, 86, 172, 257, 341, 424, 506, 587,
+        667, 746, 823, 899, 974, 1047, 1119, 1189,
+        1258, 1325, 1390, 1454, 1517, 1578, 1637, 1695,
+        1751, 1805, 1858, 1909, 1958, 2005, 2051, 2095,
+        2137, 2177, 2216, 2252, 2287, 2320, 2351, 2380,
+        2408, 2433, 2457, 2479, 2499, 2517, 2534, 2549,
+        2562, 2574, 2584, 2592, 2599, 2604, 2607, 2609,
+        2609, 2607, 2604, 2599, 2592, 2584, 2574, 2562,
+        2549, 2534, 2517, 2499, 2479, 2457, 2433, 2408,
+        2380, 2351, 2320, 2287, 2252, 2216, 2177, 2137,
+        2095, 2051, 2005, 1958, 1909, 1858, 1805, 1751,
+        1695, 1637, 1578, 1517, 1454, 1390, 1325, 1258,
+        1189, 1119, 1047, 974, 899, 823, 746, 667,
+        587, 506, 424, 341, 257, 172, 86, 0,
+        /* Mirror for second half of period */
+        0, 86, 172, 257, 341, 424, 506, 587,
+        667, 746, 823, 899, 974, 1047, 1119, 1189,
+        1258, 1325, 1390, 1454, 1517, 1578, 1637, 1695,
+        1751, 1805, 1858, 1909, 1958, 2005, 2051, 2095,
+        2137, 2177, 2216, 2252, 2287, 2320, 2351, 2380,
+        2408, 2433, 2457, 2479, 2499, 2517, 2534, 2549,
+        2562, 2574, 2584, 2592, 2599, 2604, 2607, 2609,
+        2609, 2607, 2604, 2599, 2592, 2584, 2574, 2562,
+        2549, 2534, 2517, 2499, 2479, 2457, 2433, 2408,
+        2380, 2351, 2320, 2287, 2252, 2216, 2177, 2137,
+        2095, 2051, 2005, 1958, 1909, 1858, 1805, 1751,
+        1695, 1637, 1578, 1517, 1454, 1390, 1325, 1258,
+        1189, 1119, 1047, 974, 899, 823, 746, 667,
+        587, 506, 424, 341, 257, 172, 86, 0
+    };
 
-        v <<= 4;
-        k->ptr_a[i] = fxmul_scaled(slope, v);
+    if (period <= 256) {
+        /* Use table lookup for fast path */
+        for (i = at; i < at + count; i++) {
+            int16_t frac = parabolic_table[((i - at) * 255) / period];
+            int32_t v = ((int32_t)frac * (0x5555 - frac)) >> 15;
+            v <<= 4;
+            k->ptr_a[i] = fxmul_scaled(slope, v);
+        }
+    } else {
+        /* Fallback to original computation for large periods */
+        for (i = at; i < at + count; i++) {
+            int16_t frac = fxdivl(i - at, period);
+            int32_t v = fxmul_scaled(frac, 0x5555 - frac);
+
+            v <<= 4;
+            k->ptr_a[i] = fxmul_scaled(slope, v);
+        }
     }
 }
 
@@ -718,6 +773,9 @@ int KlattSynth(void *handle, const int32_t *parms)
                         pole_filter(&k->filters[CASCADE_BASE], k->ptr_a,
                                     k->noise_count);
 
+                    /* Prefetch next filter state for cascade */
+                    PREFETCH_READ(&k->filters[CASCADE_BASE]);
+
                     if (k->ah == 0 && k->av == 0) {
                         k->unknown_1498 -= k->unknown_14a0;
                         if (k->unknown_1498 < 0)
@@ -789,6 +847,34 @@ int KlattSynth(void *handle, const int32_t *parms)
                 if (v > k->max)
                     k->max = v;
             }
+
+#if defined(__aarch64__) || defined(__ARM_NEON)
+            /* NEON-optimized output stage: process 4 samples at a time */
+            if (k->noise_count >= 8) {
+                int32x4_t v_shift = vdupq_n_s32(4);
+                int32x4_t v_max = vdupq_n_s32(k->max);
+                int32_t i = 0;
+                for (; i + 3 < k->noise_count; i += 4) {
+                    int32x4_t v_in = vld1q_s32(&k->ptr_a[i]);
+                    int32x4_t v_out = vshrq_n_s32(v_in, 4);
+                    vst1q_s32(&k->out[i], v_out);
+
+                    int32x4_t v_abs = vabsq_s32(v_out);
+                    v_max = vmaxq_s32(v_max, v_abs);
+                }
+                /* Horizontal max reduction */
+                int32x2_t v_max2 = vpmax_s32(vget_low_s32(v_max), vget_high_s32(v_max));
+                int32x2_t v_max1 = vpmax_s32(v_max2, v_max2);
+                k->max = vmaxv_s32(v_max1);
+
+                for (; i < k->noise_count; i++) {
+                    int32_t v = k->ptr_a[i] >> 4;
+                    k->out[i] = v;
+                    if (v < 0) v = -v;
+                    if (v > k->max) k->max = v;
+                }
+            }
+#endif
         }
 
         output_speech(k, k->noise_count);

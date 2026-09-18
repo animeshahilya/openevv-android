@@ -75,6 +75,7 @@ set(OPENEVV_ENGINE_COMPILE_OPTIONS
     -Wno-implicit-function-declaration
     -Werror=int-conversion
     -Werror=incompatible-pointer-types
+    -fno-strict-aliasing  # Engine code has type-punning, disable strict aliasing for it
 )
 
 # Modern code flags (JNI bridge, CLI - keep warnings visible)
@@ -83,6 +84,7 @@ set(OPENEVV_MODERN_COMPILE_OPTIONS
     -Wextra
     -Wno-unused-parameter
     -Wno-missing-field-initializers
+    -fstrict-aliasing
 )
 
 # Optimization flags
@@ -95,13 +97,26 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel"
         -fno-trapping-math
         -ffp-contract=fast
         -fno-math-errno
+        -funroll-loops
+        -ftree-vectorize
+        -fvect-cost-model=very-cheap
     )
 elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(OPENEVV_OPT_COMPILE_OPTIONS -O0 -g -DDEBUG=1)
 elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
-    set(OPENEVV_OPT_COMPILE_OPTIONS -O2 -g -fomit-frame-pointer)
+    set(OPENEVV_OPT_COMPILE_OPTIONS -O2 -g -fomit-frame-pointer
+        -ftree-vectorize
+    )
 else()
     set(OPENEVV_OPT_COMPILE_OPTIONS -O2)
+endif()
+
+# Architecture-specific flags for ARM64 (Pixel 8 target)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+    list(APPEND OPENEVV_OPT_COMPILE_OPTIONS
+        -march=armv8.2-a
+        -mtune=cortex-a76
+    )
 endif()
 
 # Hardening flags (when enabled)

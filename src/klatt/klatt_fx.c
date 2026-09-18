@@ -85,8 +85,36 @@ int16_t fxdivl(int32_t num, int32_t den)
 }
 
 
-void fxmul_vector(const int32_t *src, int16_t coef, int32_t *acc, int32_t n)
+void fxmul_vector(const int32_t *__restrict src, int16_t coef, int32_t *__restrict acc, int32_t n)
 {
+#if defined(__aarch64__) || defined(__ARM_NEON)
+    if (n >= 8) {
+        int32_t i = 0;
+        int32x4_t v_coef = vdupq_n_s32((int32_t)coef);
+        int32x4_t v_shift = vdupq_n_s32(15);
+
+        for (; i + 3 < n; i += 4) {
+            int32x4_t v_src = vld1q_s32(&src[i]);
+            int32x4_t v_acc = vld1q_s32(&acc[i]);
+
+            /* Multiply and shift right by 15 (Q15 fixed-point) */
+            int64x2_t prod_lo = vmull_s32(vget_low_s32(v_src), vget_low_s32(v_coef));
+            int64x2_t prod_hi = vmull_s32(vget_high_s32(v_src), vget_high_s32(v_coef));
+
+            int32x4_t res = vcombine_s32(
+                vshrn_n_s64(prod_lo, 15),
+                vshrn_n_s64(prod_hi, 15)
+            );
+
+            v_acc = vaddq_s32(v_acc, res);
+            vst1q_s32(&acc[i], v_acc);
+        }
+
+        for (; i < n; i++)
+            acc[i] += fxmul_scaled(coef, src[i]);
+        return;
+    }
+#endif
     int32_t i = 0;
 
     for (; i + 3 < n; i += 4) {
@@ -103,8 +131,40 @@ void fxmul_vector(const int32_t *src, int16_t coef, int32_t *acc, int32_t n)
         acc[i] += fxmul_scaled(coef, src[i]);
 }
 
-void fxmul1_vector(const int16_t *src, int16_t coef, int32_t *acc, int32_t n)
+void fxmul1_vector(const int16_t *__restrict src, int16_t coef, int32_t *__restrict acc, int32_t n)
 {
+#if defined(__aarch64__) || defined(__ARM_NEON)
+    if (n >= 8) {
+        int32_t i = 0;
+        int32x4_t v_coef = vdupq_n_s32((int32_t)coef);
+        int32x4_t v_shift15 = vdupq_n_s32(15);
+        int32x4_t v_shift4 = vdupq_n_s32(4);
+
+        for (; i + 3 < n; i += 4) {
+            /* Load 4 int16_t values and extend to int32_t */
+            int16x4_t v_src16 = vld1_s16(&src[i]);
+            int32x4_t v_src = vshll_n_s16(v_src16, 4);  /* << 4 */
+
+            int32x4_t v_acc = vld1q_s32(&acc[i]);
+
+            /* Multiply and shift right by 15 (Q15 fixed-point) */
+            int64x2_t prod_lo = vmull_s32(vget_low_s32(v_src), vget_low_s32(v_coef));
+            int64x2_t prod_hi = vmull_s32(vget_high_s32(v_src), vget_high_s32(v_coef));
+
+            int32x4_t res = vcombine_s32(
+                vshrn_n_s64(prod_lo, 15),
+                vshrn_n_s64(prod_hi, 15)
+            );
+
+            v_acc = vaddq_s32(v_acc, res);
+            vst1q_s32(&acc[i], v_acc);
+        }
+
+        for (; i < n; i++)
+            acc[i] += fxmul_scaled(coef, (int32_t)src[i] << 4);
+        return;
+    }
+#endif
     int32_t i = 0;
 
     for (; i + 3 < n; i += 4) {
@@ -157,8 +217,15 @@ typedef char filter_parms_is_84_bytes[sizeof(filter_parms) == 84 ? 1 : -1];
    coefficients are held at three different fixed-point scales. */
 static void pole_filter_wide(filter_parms *fp, int32_t *buf, int32_t n);
 
-void pole_filter(filter_parms *fp, int32_t *buf, int32_t n)
+void pole_filter(filter_parms *__restrict fp, int32_t *__restrict buf, int32_t n)
 {
+#if defined(__aarch64__) || defined(__ARM_NEON)
+    if (n >= 8 && !klatt_wide_on() && fp->ramp == 0) {
+        pole_filter_neon(fp, buf, n);
+        return;
+    }
+#endif
+
     int32_t i, count, k, t1, t2, t3;
 
     if (fp->enabled == 0)
@@ -242,7 +309,7 @@ void pole_filter(filter_parms *fp, int32_t *buf, int32_t n)
 /* The same resonator with no input term and no ramp: it runs purely on its
    own history, which is what the parallel branch wants when the excitation is
    summed in somewhere else. */
-void parallel0_filter(filter_parms *fp, int32_t *buf, int32_t n)
+void parallel0_filter(filter_parms *__restrict fp, int32_t *__restrict buf, int32_t n)
 {
     int32_t i, t1, t2;
 
@@ -290,7 +357,7 @@ void parallel0_filter(filter_parms *fp, int32_t *buf, int32_t n)
     }
 }
 
-void zero_filter(filter_parms *fp, const zero_ABCs *z, int32_t *buf, int32_t n)
+void zero_filter(filter_parms *__restrict fp, const zero_ABCs *__restrict z, int32_t *__restrict buf, int32_t n)
 {
     int32_t p1, p2, x, i, count, k;
 
@@ -668,3 +735,125 @@ int klatt_wide_on(void)
 {
     return wide_on;
 }
+
+#if defined(__aarch64__) || defined(__ARM_NEON)
+#include <arm_neon.h>
+
+/* NEON-optimized pole_filter for ARM64.
+ * Processes 4 samples per iteration using 128-bit NEON registers.
+ * Uses 32-bit integer arithmetic with Q15 fixed-point coefficients. */
+void pole_filter_neon(filter_parms *fp, int32_t *buf, int32_t n)
+{
+    int32_t i, count, k;
+    int32_t *history = buf - 2;
+
+    if (fp->enabled == 0)
+        return;
+
+    /* Initialize history from filter state */
+    history[0] = fp->d2;
+    history[1] = fp->d1;
+    i = 0;
+
+    if (klatt_wide_on()) {
+        /* Delegate to existing wide implementation */
+        pole_filter_wide(fp, buf, n);
+        return;
+    }
+
+    /* Handle ramp phase if needed */
+    if (fp->ramp != 0) {
+        count = fp->ramp < n ? fp->ramp : n;
+        k = 3 - fp->ramp;
+
+        for (; i < count; i++) {
+            int32_t t1 = fxmul_scaled(fp->c[k], buf[i - 2]);
+            int32_t t2 = fxmul_scaled(fp->b[k], buf[i - 1]);
+            int32_t t3 = fxmul_scaled(fp->a[k], buf[i]);
+            buf[i] = t1 + t2 * 2 + t3 * 4;
+            k++;
+        }
+        fp->ramp -= count;
+    }
+
+    if (i >= n) {
+        if (n > 1) {
+            fp->d2 = buf[i - 2];
+            fp->d1 = buf[i - 1];
+        } else {
+            fp->d2 = fp->d1;
+            fp->d1 = buf[i - 1];
+        }
+        return;
+    }
+
+    /* Steady-state phase: process 4 samples at a time with NEON */
+    const int16_t sc = fp->sc;
+    const int16_t sb = fp->sb;
+    const int16_t sa = fp->sa;
+
+    /* Load coefficients into NEON registers */
+    int32x4_t v_sc = vdupq_n_s32((int32_t)sc);
+    int32x4_t v_sb = vdupq_n_s32((int32_t)sb);
+    int32x4_t v_sa = vdupq_n_s32((int32_t)sa);
+    int32x4_t v_two = vdupq_n_s32(2);
+    int32x4_t v_four = vdupq_n_s32(4);
+    int32x4_t v_shift = vdupq_n_s32(15);
+
+    int32_t p2 = buf[i - 2];
+    int32_t p1 = buf[i - 1];
+
+    /* Process 4 samples per iteration */
+    for (; i + 3 < n; i += 4) {
+        /* Load 4 input samples */
+        int32x4_t in = vld1q_s32(&buf[i]);
+
+        /* t1 = sc * p2 (previous-previous output) */
+        int32x4_t t1 = vdupq_n_s32(fxmul_scaled(sc, p2));
+
+        /* t2 = sb * p1 (previous output) */
+        int32x4_t t2 = vdupq_n_s32(fxmul_scaled(sb, p1));
+
+        /* t3 = sa * in (current input) - vectorized */
+        int32x4_t t3;
+        {
+            int32_t t3_0 = fxmul_scaled(sa, buf[i]);
+            int32_t t3_1 = fxmul_scaled(sa, buf[i + 1]);
+            int32_t t3_2 = fxmul_scaled(sa, buf[i + 2]);
+            int32_t t3_3 = fxmul_scaled(sa, buf[i + 3]);
+            t3 = vld1q_s32((int32_t[4]){t3_0, t3_1, t3_2, t3_3});
+        }
+
+        /* out = t1 + t2*2 + t3*4 */
+        int32x4_t out = vaddq_s32(vaddq_s32(t1, vmulq_s32(t2, v_two)), vmulq_s32(t3, v_four));
+
+        /* Store results */
+        vst1q_s32(&buf[i], out);
+
+        /* Update history for next iteration */
+        p2 = buf[i + 2];
+        p1 = buf[i + 3];
+    }
+
+    /* Handle remainder samples */
+    for (; i < n; i++) {
+        int32_t in = buf[i];
+        int32_t t1 = fxmul_scaled(sc, p2);
+        int32_t t2 = fxmul_scaled(sb, p1);
+        int32_t t3 = fxmul_scaled(sa, in);
+        int32_t out = t1 + t2 * 2 + t3 * 4;
+        buf[i] = out;
+        p2 = p1;
+        p1 = out;
+    }
+
+    /* Save final state */
+    if (n > 1) {
+        fp->d2 = buf[n - 2];
+        fp->d1 = buf[n - 1];
+    } else {
+        fp->d2 = fp->d1;
+        fp->d1 = buf[n - 1];
+    }
+}
+#endif

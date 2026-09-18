@@ -67,16 +67,16 @@ struct klatt_state {
     /* Steady-state coefficients for the two zeros, filters 1 and 2. Eight
        bytes apiece rather than six, so the array stays word aligned. */
     struct { int16_t a, b, c, pad; } zeros[3];   /* 0x0748 */
-    int32_t          out[200];            /* 0x0760, the sample buffer */
+    int32_t          out[200] __attribute__((aligned(16))); /* 0x0760, the sample buffer */
     KlattConstParms  cp;                  /* 0x0a80 */
     uint8_t          pad_0ac4[8];
-    int32_t          buf_a[200];          /* 0x0acc */
+    int32_t          buf_a[200] __attribute__((aligned(16))); /* 0x0acc */
     int32_t         *ptr_a;               /* 0x0dec, points at buf_a */
     /* The frication noise, scaled up into accumulator range. The eight bytes
        after it are buf_b's history headroom, the same as before buf_a. */
-    int32_t          frication[200];      /* 0x0df0 */
+    int32_t          frication[200] __attribute__((aligned(16))); /* 0x0df0 */
     uint8_t          pad_1110[8];
-    int32_t          buf_b[200];          /* 0x1118 */
+    int32_t          buf_b[200] __attribute__((aligned(16))); /* 0x1118 */
     int32_t         *ptr_b;               /* 0x1438, points at buf_b */
     int16_t          ab_gain;             /* 0x143c, the bypass path */
     int16_t          co[21];              /* 0x143e, cosine term per resonator */
@@ -112,7 +112,7 @@ struct klatt_state {
        same list back to decide where to attenuate. Entry zero is where the
        first attenuation run ends; after that they come in pairs, a skip and
        a run. It stops at 0x1818 because 0x181c is written as a scalar. */
-    int32_t          spans[199];          /* 0x14fc */
+    int32_t          spans[200] __attribute__((aligned(16))); /* 0x14fc */
     int32_t          unknown_1818;        /* 0x1818 */
     int32_t          n_formants;          /* 0x181c, copied from the const parms */
     int32_t          tilt;                /* 0x1820, spectral tilt, capped at 35 */
@@ -131,7 +131,7 @@ struct klatt_state {
     int32_t          flutter;             /* 0x1848, this frame's pitch wobble */
     /* Same reasoning as pairs: 0x19dc is written as a 32-bit scalar, so the
        buffer stops there. */
-    int16_t          noise_buf[200];      /* 0x184c */
+    int16_t          noise_buf[200] __attribute__((aligned(16))); /* 0x184c */
     int32_t          unknown_19dc;        /* 0x19dc */
     int32_t          unknown_19e0;        /* 0x19e0 */
     int32_t          diplo_on;        /* 0x19e4 */
@@ -141,7 +141,7 @@ struct klatt_state {
     int32_t          unknown_19f4;        /* 0x19f4 */
     /* One flag per sample saying whether it fell inside a glottal period,
        built from the span list above. */
-    int32_t          voiced_flags[200];   /* 0x19f8 */
+    int32_t          voiced_flags[200] __attribute__((aligned(16))); /* 0x19f8 */
     int32_t          unknown_1d18;        /* 0x1d18 */
     int32_t          output_samples;      /* 0x1d1c */
     int32_t          rate_code;           /* 0x1d20, 0 at 8k, 1 at 11k, else 2 */

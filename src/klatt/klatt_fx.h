@@ -90,6 +90,19 @@ EVV_INLINE int32_t fxmul_scaled(int32_t coef, int32_t x)
 
 EVV_INLINE void clr_vector(int32_t *v, int32_t n)
 {
+#if defined(__aarch64__) || defined(__ARM_NEON)
+    if (n >= 8) {
+        int32x4_t zero = vdupq_n_s32(0);
+        int32_t i = 0;
+        for (; i + 7 < n; i += 8) {
+            vst1q_s32(&v[i], zero);
+            vst1q_s32(&v[i + 4], zero);
+        }
+        for (; i < n; i++)
+            v[i] = 0;
+        return;
+    }
+#endif
     memset(v, 0, (size_t)n * sizeof(int32_t));
 }
 uint32_t klatt_rand(int16_t *out, int32_t n, uint32_t seed);
@@ -97,8 +110,8 @@ void     klatt_shape_noise(int16_t *buf, int32_t n, int32_t rate, double *z);
 void     klatt_wide_enable(int32_t rate);
 int      klatt_wide_on(void);
 int16_t  fxdivl(int32_t num, int32_t den);
-void     fxmul_vector(const int32_t *src, int16_t coef, int32_t *acc, int32_t n);
-void     fxmul1_vector(const int16_t *src, int16_t coef, int32_t *acc, int32_t n);
+void fxmul_vector(const int32_t *__restrict src, int16_t coef, int32_t *__restrict acc, int32_t n);
+void fxmul1_vector(const int16_t *__restrict src, int16_t coef, int32_t *__restrict acc, int32_t n);
 int32_t  db2lin(int32_t db);
 int      verifyKlattHandle(void *handle);
 
@@ -147,12 +160,16 @@ typedef struct {
     int16_t c;
 } zero_ABCs;
 
-void zero_filter(filter_parms *fp, const zero_ABCs *z, int32_t *buf, int32_t n);
+void zero_filter(filter_parms *__restrict fp, const zero_ABCs *__restrict z, int32_t *__restrict buf, int32_t n);
 
 /* buf must have two writable samples before it: the resonator seeds its own
    history there and reads them back as y[n-1] and y[n-2]. */
-void pole_filter(filter_parms *fp, int32_t *buf, int32_t n);
-void parallel0_filter(filter_parms *fp, int32_t *buf, int32_t n);
+void pole_filter(filter_parms *__restrict fp, int32_t *__restrict buf, int32_t n);
+void parallel0_filter(filter_parms *__restrict fp, int32_t *__restrict buf, int32_t n);
+
+#if defined(__aarch64__) || defined(__ARM_NEON)
+void pole_filter_neon(filter_parms *__restrict fp, int32_t *__restrict buf, int32_t n);
+#endif
 
 extern const char KlattVersionString[];
 

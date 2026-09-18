@@ -169,8 +169,31 @@ void output_speech(klatt_state *k, int32_t n)
     s.samples = k->out;
 
     if (k->volume != 100) {
-        for (i = 0; i < n; i++)
-            k->out[i] = mul32(k->out[i], k->volume) / 100;
+#if defined(__aarch64__) || defined(__ARM_NEON)
+        if (n >= 8) {
+            int32x4_t v_vol = vdupq_n_s32(k->volume);
+            int32x4_t v_100 = vdupq_n_s32(100);
+            int32_t i = 0;
+            for (; i + 3 < n; i += 4) {
+                int32x4_t v_out = vld1q_s32(&k->out[i]);
+                int64x2_t prod_lo = vmull_s32(vget_low_s32(v_out), vget_low_s32(v_vol));
+                int64x2_t prod_hi = vmull_s32(vget_high_s32(v_out), vget_high_s32(v_vol));
+                int32x4_t res = vcombine_s32(
+                    vshlq_s32(vshrn_n_s64(prod_lo, 16), vdupq_n_s32(-8)),
+                    vshlq_s32(vshrn_n_s64(prod_hi, 16), vdupq_n_s32(-8))
+                );
+                /* Approximate division by 100 using multiply-shift */
+                res = vmulq_s32(res, vdupq_n_s32(0x889)); /* 0x889/65536 ≈ 1/100 */
+                vst1q_s32(&k->out[i], vshrq_n_s32(res, 16));
+            }
+            for (; i < n; i++)
+                k->out[i] = mul32(k->out[i], k->volume) / 100;
+        } else
+#endif
+        {
+            for (i = 0; i < n; i++)
+                k->out[i] = mul32(k->out[i], k->volume) / 100;
+        }
     }
 
     if (k->cp.callback_mode != 2)
