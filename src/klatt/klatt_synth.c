@@ -364,13 +364,6 @@ int KlattSynth(void *handle, const int32_t *parms)
     /* Parallel branch: same shape, but each resonator is scaled by its own
        amplitude rather than left at unity.
        NEON-optimized: process 4 parallel formants at a time for independent computations. */
-    four = 4;
-    ab_base = k->af + k->unknown_1834 + k->unknown_183c;
-
-if (parms[P_AB] != 0)
-        k->ab_gain = (int16_t)fxmul_scaled((int16_t)-four,
-                                               db2lin(ab_base + parms[P_AB]));
-
     int n_parallel = k->n_formants;
     i = PARALLEL_BASE;
 
