@@ -1173,7 +1173,6 @@ long delta_rule_steps;
    the definitions they reach. */
 
 int delta_rule_trace = -1;
-static long delta_rule_limit;
 
 /* Every call a rule makes, from the interpreter and from a rule written as C
    alike, so that a run says the same thing about itself either way. */
@@ -1402,7 +1401,6 @@ int32_t delta_run_rule(void *state, const delta_rule *r, const int32_t *args,
         const char *e = getenv("DELTA_RULE_TRACE");
 
         delta_rule_trace = (e != 0) ? (atoi(e) > 100000 ? 2 : 1) : 0;
-        delta_rule_limit = (e != 0 && *e) ? atol(e) : 0;
         if (delta_rule_trace)
             atexit(delta_rule_report);
     }

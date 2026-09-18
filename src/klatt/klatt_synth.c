@@ -439,8 +439,6 @@ fp2->sa = (int16_t)(0x2000 - (fp2->sb >> 1) - (fp2->sc >> 2));
             } else fp3->sa = 0;
             fp3->unknown_08 = 1;
         }
-        /* four flips 4 times in NEON path, skip to next group */
-        continue;
     }
     }
 #endif
@@ -1048,17 +1046,6 @@ fp2->sa = (int16_t)(0x2000 - (fp2->sb >> 1) - (fp2->sc >> 2));
 
             /* Down from the accumulator's headroom into sample range, keeping
                the largest magnitude seen so KlattMax can report it. */
-            for (i = 0; i < k->noise_count; i++) {
-                int32_t v;
-
-                k->out[i] = k->ptr_a[i] >> 4;
-                v = k->out[i];
-                if (v < 0)
-                    v = (int32_t)(-(uint32_t)v);
-                if (v > k->max)
-                    k->max = v;
-            }
-
 #if defined(__aarch64__) || defined(__ARM_NEON)
             /* NEON-optimized output stage: process 4 samples at a time */
             if (k->noise_count >= 8) {
@@ -1081,8 +1068,20 @@ fp2->sa = (int16_t)(0x2000 - (fp2->sb >> 1) - (fp2->sc >> 2));
                     if (v < 0) v = -v;
                     if (v > k->max) k->max = v;
                 }
-            }
+            } else
 #endif
+            {
+                for (i = 0; i < k->noise_count; i++) {
+                    int32_t v;
+
+                    k->out[i] = k->ptr_a[i] >> 4;
+                    v = k->out[i];
+                    if (v < 0)
+                        v = (int32_t)(-(uint32_t)v);
+                    if (v > k->max)
+                        k->max = v;
+                }
+            }
         }
 
         output_speech(k, k->noise_count);

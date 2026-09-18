@@ -435,7 +435,6 @@ typedef struct Cell {
    fifteen hundred, twenty-five hundred and so on, and everything not named
    at nought. Lifted out of the original, which builds this on the stack one
    store at a time. */
-#define FRAME_WORDS   62
 #define FRAME_END     63
 
 static const int32_t DEFAULT_FRAME[FRAME_WORDS] = {

@@ -65,7 +65,6 @@
 #define EQ_FRAME 2048
 #define EQ_INDEX_QUEUE 16
 #define EQ_MAX_TEXT_BYTES (64 * 1024)
-#define EQ_FRAME 2048
 #define EVN_MAX_TEXT_BYTES (64 * 1024)
 #define EVN_FRAME 2048
 #define EVN_DRAIN_SPINS 3000
@@ -260,16 +259,6 @@ static int eq_dict_ensure(ECIHand h, eq_extra *e)
     pthread_mutex_unlock(&eq_extra_lock);
     return 1;
 }
-
-/* Same hardening bounds as the sibling bridge: whole-utterance synthesis
- * holds one chunk in RAM; long text belongs in caller-side chunks (the
- * service already splits via chunkRangesForSynthesis). */
-#define EVN_MAX_TEXT_BYTES (64 * 1024)
-#define EVN_FRAME 2048
-#define EVN_DRAIN_SPINS 3000
-#define EVN_DRAIN_SLEEP_US (10 * 1000)
-#define EVN_MAX_SLOTS 8
-#define EVN_MAX_DICT_PATH 512
 
 /* ---- one-time init -------------------------------------------------- */
 

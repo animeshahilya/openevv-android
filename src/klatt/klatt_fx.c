@@ -119,7 +119,6 @@ void fxmul_vector(const int32_t *__restrict src, int16_t coef, int32_t *__restri
     if (n >= 8) {
         int32_t i = 0;
         int32x4_t v_coef = vdupq_n_s32((int32_t)coef);
-        int32x4_t v_shift = vdupq_n_s32(15);
 
         for (; i + 3 < n; i += 4) {
             int32x4_t v_src = vld1q_s32(&src[i]);
@@ -165,8 +164,6 @@ void fxmul1_vector(const int16_t *__restrict src, int16_t coef, int32_t *__restr
     if (n >= 8) {
         int32_t i = 0;
         int32x4_t v_coef = vdupq_n_s32((int32_t)coef);
-        int32x4_t v_shift15 = vdupq_n_s32(15);
-        int32x4_t v_shift4 = vdupq_n_s32(4);
 
         for (; i + 3 < n; i += 4) {
             /* Load 4 int16_t values and extend to int32_t */
