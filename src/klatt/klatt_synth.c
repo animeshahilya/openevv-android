@@ -362,7 +362,7 @@ int KlattSynth(void *handle, const int32_t *parms)
     four = 4;
     ab_base = k->af + k->unknown_1834 + k->unknown_183c;
 
-    if (parms[P_AB] != 0)
+if (parms[P_AB] != 0)
         k->ab_gain = (int16_t)fxmul_scaled((int16_t)-four,
                                                db2lin(ab_base + parms[P_AB]));
 
@@ -370,12 +370,19 @@ int KlattSynth(void *handle, const int32_t *parms)
     i = PARALLEL_BASE;
 
 #if defined(__aarch64__) || defined(__ARM_NEON)
-    /* Process 4 parallel formants at a time with NEON */
+    /* Process 4 parallel formants at a time with NEON.
+       Adjacent parallel formants are summed in opposite polarity, so the
+       gain flips sign every slot whether or not this one is live. */
     for (; i + 3 < n_parallel + PARALLEL_BASE; i += 4) {
         filter_parms *fp0 = &k->filters[i];
         filter_parms *fp1 = &k->filters[i + 1];
         filter_parms *fp2 = &k->filters[i + 2];
         filter_parms *fp3 = &k->filters[i + 3];
+
+        int16_t four0 = four;
+        int16_t four1 = (int16_t)-four;
+        int16_t four2 = four;
+        int16_t four3 = (int16_t)-four;
 
         if (EVV_LIKELY(fp0->enabled != 0 || fp1->enabled != 0 || fp2->enabled != 0 || fp3->enabled != 0)) {
             if (fp0->enabled != 0) {
@@ -384,7 +391,7 @@ int KlattSynth(void *handle, const int32_t *parms)
                 fp0->sb_scale = 1;
                 fp0->sa_scale = 2;
                 if (amp[i] != 0) {
-                    int16_t gain = (int16_t)fxmul_scaled(four, db2lin(ab_base + amp[i]));
+                    int16_t gain = (int16_t)fxmul_scaled(four0, db2lin(ab_base + amp[i]));
                     fp0->sb = (int16_t)(fp0->sb & ~1);
                     fp0->sc = (int16_t)(fp0->sc & ~3);
                     fp0->sa = (int16_t)(0x2000 - (fp0->sb >> 1) - (fp0->sc >> 2));
@@ -398,7 +405,7 @@ int KlattSynth(void *handle, const int32_t *parms)
                 fp1->sb_scale = 1;
                 fp1->sa_scale = 2;
                 if (amp[i+1] != 0) {
-                    int16_t gain = (int16_t)fxmul_scaled((int16_t)-four, db2lin(ab_base + amp[i+1]));
+                    int16_t gain = (int16_t)fxmul_scaled(four1, db2lin(ab_base + amp[i+1]));
                     fp1->sb = (int16_t)(fp1->sb & ~1);
                     fp1->sc = (int16_t)(fp1->sc & ~3);
                     fp1->sa = (int16_t)(0x2000 - (fp1->sb >> 1) - (fp1->sc >> 2));
@@ -412,31 +419,31 @@ int KlattSynth(void *handle, const int32_t *parms)
                 fp2->sb_scale = 1;
                 fp2->sa_scale = 2;
                 if (amp[i+2] != 0) {
-                    int16_t gain = (int16_t)fxmul_scaled(four, db2lin(ab_base + amp[i+2]));
+                    int16_t gain = (int16_t)fxmul_scaled(four2, db2lin(ab_base + amp[i+2]));
                     fp2->sb = (int16_t)(fp2->sb & ~1);
                     fp2->sc = (int16_t)(fp2->sc & ~3);
-                    fp2->sa = (int16_t)(0x2000 - (fp2->sb >> 1) - (fp2->sc >> 2));
-                    fp2->sa = (int16_t)fxmul_scaled(fp2->sa, gain);
-                } else fp2->sa = 0;
-                fp2->unknown_08 = 1;
-            }
-            if (fp3->enabled != 0) {
-                fp3->sc = (int16_t)fxmul_scaled((int16_t)-k->ex[i+3], k->ex[i+3]);
-                fp3->sb = (int16_t)fxmul_scaled(k->ex[i+3], k->co[i+3]);
-                fp3->sb_scale = 1;
-                fp3->sa_scale = 2;
-                if (amp[i+3] != 0) {
-                    int16_t gain = (int16_t)fxmul_scaled((int16_t)-four, db2lin(ab_base + amp[i+3]));
-                    fp3->sb = (int16_t)(fp3->sb & ~1);
-                    fp3->sc = (int16_t)(fp3->sc & ~3);
-                    fp3->sa = (int16_t)(0x2000 - (fp3->sb >> 1) - (fp3->sc >> 2));
-                    fp3->sa = (int16_t)fxmul_scaled(fp3->sa, gain);
-                } else fp3->sa = 0;
-                fp3->unknown_08 = 1;
-            }
-            four = (int16_t)(-four * 4);  /* Flip 4 times */
-            continue;
+fp2->sa = (int16_t)(0x2000 - (fp2->sb >> 1) - (fp2->sc >> 2));
+                fp2->sa = (int16_t)fxmul_scaled(fp2->sa, gain);
+            } else fp2->sa = 0;
+            fp2->unknown_08 = 1;
         }
+        if (fp3->enabled != 0) {
+            fp3->sc = (int16_t)fxmul_scaled((int16_t)-k->ex[i+3], k->ex[i+3]);
+            fp3->sb = (int16_t)fxmul_scaled(k->ex[i+3], k->co[i+3]);
+            fp3->sb_scale = 1;
+            fp3->sa_scale = 2;
+            if (amp[i+3] != 0) {
+                int16_t gain = (int16_t)fxmul_scaled(four3, db2lin(ab_base + amp[i+3]));
+                fp3->sb = (int16_t)(fp3->sb & ~1);
+                fp3->sc = (int16_t)(fp3->sc & ~3);
+                fp3->sa = (int16_t)(0x2000 - (fp3->sb >> 1) - (fp3->sc >> 2));
+                fp3->sa = (int16_t)fxmul_scaled(fp3->sa, gain);
+            } else fp3->sa = 0;
+            fp3->unknown_08 = 1;
+        }
+        /* four flips 4 times in NEON path, skip to next group */
+        continue;
+    }
     }
 #endif
 

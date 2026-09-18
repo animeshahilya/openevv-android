@@ -20,6 +20,9 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
+# Add SizeOptimize build type
+set(CMAKE_CONFIGURATION_TYPES "Debug;Release;RelWithDebInfo;MinSizeRel;SizeOptimize")
+
 # =============================================================================
 # Configuration Options
 # =============================================================================
@@ -100,6 +103,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel"
         -funroll-loops
         -ftree-vectorize
         -fvect-cost-model=very-cheap
+        -fno-ident
+        -fno-math-errno
+        -fno-unwind-tables
+        -fno-asynchronous-unwind-tables
     )
 elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(OPENEVV_OPT_COMPILE_OPTIONS -O0 -g -DDEBUG=1)
@@ -111,11 +118,34 @@ else()
     set(OPENEVV_OPT_COMPILE_OPTIONS -O2)
 endif()
 
+# PGO support (Profile-Guided Optimization)
+option(OPENEVV_PGO_GENERATE "Enable profile generation for PGO" OFF)
+option(OPENEVV_PGO_USE "Enable profile use for PGO" OFF)
+
+if(OPENEVV_PGO_GENERATE)
+    list(APPEND OPENEVV_OPT_COMPILE_OPTIONS -fprofile-generate)
+    list(APPEND OPENEVV_BASE_LINK_OPTIONS -fprofile-generate)
+elseif(OPENEVV_PGO_USE)
+    list(APPEND OPENEVV_OPT_COMPILE_OPTIONS -fprofile-use)
+    list(APPEND OPENEVV_BASE_LINK_OPTIONS -fprofile-use)
+endif()
+
 # Architecture-specific flags for ARM64 (Pixel 8 target)
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
     list(APPEND OPENEVV_OPT_COMPILE_OPTIONS
         -march=armv8.2-a
         -mtune=cortex-a76
+        -moutline-atomics
+    )
+endif()
+
+# Size optimization flags
+if(CMAKE_BUILD_TYPE STREQUAL "MinSizeRel" OR CMAKE_BUILD_TYPE STREQUAL "SizeOptimize")
+    list(APPEND OPENEVV_OPT_COMPILE_OPTIONS
+        -fno-unroll-loops
+        -fno-inline-functions
+        -fno-peel-loops
+        -fno-toplevel-reorder
     )
 endif()
 
