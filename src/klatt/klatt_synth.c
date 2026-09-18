@@ -526,8 +526,21 @@ fp2->sa = (int16_t)(0x2000 - (fp2->sb >> 1) - (fp2->sc >> 2));
         if (k->unknown_1498 <= 0 && k->unknown_149c <= 0 &&
             k->carry_lead == 0 && k->carry_closed == 0 &&
             k->carry_open == 0) {
+#if defined(__aarch64__) || defined(__ARM_NEON)
+            /* NEON zeroing */
+            {
+                int32_t n = k->noise_count;
+                int32_t idx = 0;
+                int32x4_t v_zero = vdupq_n_s32(0);
+                for (; idx + 3 < n; idx += 4)
+                    vst1q_s32(&k->out[idx], v_zero);
+                for (; idx < n; idx++)
+                    k->out[idx] = 0;
+            }
+#else
             for (i = 0; i < k->noise_count; i++)
                 k->out[i] = 0;
+#endif
         } else {
             int32_t left = block;      /* samples of this block still to fill */
             int32_t written = 0;       /* how far into the buffer we have got */
@@ -918,8 +931,24 @@ fp2->sa = (int16_t)(0x2000 - (fp2->sb >> 1) - (fp2->sc >> 2));
                 if (k->unknown_149c > 0) {
                     if (k->af != 0) {
                         k->unknown_19e0 = (int32_t)noise(k, k->unknown_19e0);
+#if defined(__aarch64__) || defined(__ARM_NEON)
+                        /* NEON vectorized frication left-shift by 4 */
+                        {
+                            int32_t m = 0;
+                            int32_t nc = k->noise_count;
+                            for (; m + 3 < nc; m += 4) {
+                                int16x4_t v = vld1_s16(&k->noise_buf[m]);
+                                int32x4_t v32 = vmovl_s16(v);
+                                v32 = vshlq_n_s32(v32, 4);
+                                vst1q_s32(&k->frication[m], v32);
+                            }
+                            for (; m < nc; m++)
+                                k->frication[m] = (int32_t)k->noise_buf[m] << 4;
+                        }
+#else
                         for (i = 0; i < k->noise_count; i++)
                             k->frication[i] = (int32_t)k->noise_buf[i] << 4;
+#endif
                     }
 
                     if (parms[P_AB] != 0 && k->af != 0)
@@ -937,11 +966,24 @@ fp2->sa = (int16_t)(0x2000 - (fp2->sb >> 1) - (fp2->sc >> 2));
                             continue;
 
                         if (k->af != 0 && amp[i] != 0) {
-                            /* Prefetch frication for vectorized copy */
-                            PREFETCH_READ(&k->frication[0]);
-                            PREFETCH_READ(&k->frication[64]);
+#if defined(__aarch64__) || defined(__ARM_NEON)
+                            /* NEON vectorized frication copy */
+                            {
+                                int32_t nc = k->noise_count;
+                                int32_t m = 0;
+                                PREFETCH_READ(&k->frication[0]);
+                                PREFETCH_READ(&k->frication[64]);
+                                for (; m + 3 < nc; m += 4) {
+                                    int32x4_t v = vld1q_s32(&k->frication[m]);
+                                    vst1q_s32(&k->ptr_b[m], v);
+                                }
+                                for (; m < nc; m++)
+                                    k->ptr_b[m] = k->frication[m];
+                            }
+#else
                             for (m = 0; m < k->noise_count; m++)
                                 k->ptr_b[m] = k->frication[m];
+#endif
                             pole_filter(&k->filters[i], k->ptr_b,
                                         k->noise_count);
                         } else {
@@ -955,9 +997,23 @@ fp2->sa = (int16_t)(0x2000 - (fp2->sb >> 1) - (fp2->sc >> 2));
                                 k->filters[i].enabled = 0;
                         }
 
-                        /* Sum back into accumulator - vectorized in fxmul_vector path */
+#if defined(__aarch64__) || defined(__ARM_NEON)
+                        /* NEON vectorized accumulator sum-back */
+                        {
+                            int32_t nc = k->noise_count;
+                            int32_t m = 0;
+                            for (; m + 3 < nc; m += 4) {
+                                int32x4_t va = vld1q_s32(&k->ptr_a[m]);
+                                int32x4_t vb = vld1q_s32(&k->ptr_b[m]);
+                                vst1q_s32(&k->ptr_a[m], vaddq_s32(va, vb));
+                            }
+                            for (; m < nc; m++)
+                                k->ptr_a[m] += k->ptr_b[m];
+                        }
+#else
                         for (m = 0; m < k->noise_count; m++)
                             k->ptr_a[m] += k->ptr_b[m];
+#endif
                     }
 
                     if (k->af == 0) {
@@ -984,7 +1040,6 @@ fp2->sa = (int16_t)(0x2000 - (fp2->sb >> 1) - (fp2->sc >> 2));
 #if defined(__aarch64__) || defined(__ARM_NEON)
             /* NEON-optimized output stage: process 4 samples at a time */
             if (k->noise_count >= 8) {
-                int32x4_t v_shift = vdupq_n_s32(4);
                 int32x4_t v_max = vdupq_n_s32(k->max);
                 int32_t i = 0;
                 for (; i + 3 < k->noise_count; i += 4) {
@@ -995,10 +1050,8 @@ fp2->sa = (int16_t)(0x2000 - (fp2->sb >> 1) - (fp2->sc >> 2));
                     int32x4_t v_abs = vabsq_s32(v_out);
                     v_max = vmaxq_s32(v_max, v_abs);
                 }
-                /* Horizontal max reduction */
-                int32x2_t v_max2 = vpmax_s32(vget_low_s32(v_max), vget_high_s32(v_max));
-                int32x2_t v_max1 = vpmax_s32(v_max2, v_max2);
-                k->max = vmaxv_s32(v_max1);
+                /* Horizontal max: AArch64 vmaxvq_s32 does this in one instruction */
+                k->max = vmaxvq_s32(v_max);
 
                 for (; i < k->noise_count; i++) {
                     int32_t v = k->ptr_a[i] >> 4;
