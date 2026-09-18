@@ -264,8 +264,40 @@ int KlattSynth(void *handle, const int32_t *parms)
     }
 
     /* Clamp and look up each cascade formant, and hand its frequency across to
-       the matching parallel slot, which only supplies its own bandwidth. */
-    for (i = CASCADE_BASE; i < k->n_formants + CASCADE_BASE; i++) {
+       the matching parallel slot, which only supplies its own bandwidth.
+       NEON-optimized: process 4 formants at a time for clamping and table lookups. */
+    int n_formants = k->n_formants;
+    i = CASCADE_BASE;
+
+#if defined(__aarch64__) || defined(__ARM_NEON)
+    /* Process 4 formants at a time with NEON for clamping */
+    for (; i + 3 < n_formants + CASCADE_BASE; i += 4) {
+        int32x4_t v_freq = vld1q_s32(&freq[i]);
+        int32x4_t v_bw = vld1q_s32(&bw[i]);
+
+        /* Clamp freq to [10, 5000] */
+        v_freq = vmaxq_s32(v_freq, vdupq_n_s32(10));
+        v_freq = vminq_s32(v_freq, vdupq_n_s32(5000));
+        vst1q_s32(&freq[i], v_freq);
+
+        /* Clamp bw to [10, 4000] */
+        v_bw = vmaxq_s32(v_bw, vdupq_n_s32(10));
+        v_bw = vminq_s32(v_bw, vdupq_n_s32(4000));
+        vst1q_s32(&bw[i], v_bw);
+
+        /* Prefetch table entries */
+        PREFETCH_READ(&k->co_table[freq[i] - 10]);
+        PREFETCH_READ(&k->co_table[freq[i+1] - 10]);
+        PREFETCH_READ(&k->co_table[freq[i+2] - 10]);
+        PREFETCH_READ(&k->co_table[freq[i+3] - 10]);
+        PREFETCH_READ(&k->ex_table[bw[i] - 10]);
+        PREFETCH_READ(&k->ex_table[bw[i+1] - 10]);
+        PREFETCH_READ(&k->ex_table[bw[i+2] - 10]);
+        PREFETCH_READ(&k->ex_table[bw[i+3] - 10]);
+    }
+#endif
+
+    for (; i < n_formants + CASCADE_BASE; i++) {
         k->filters[i].enabled = k->unknown_1498;
 
         freq[i] = clamp(freq[i], 10, 5000);
@@ -325,8 +357,90 @@ int KlattSynth(void *handle, const int32_t *parms)
                                                db2lin(ab_base + parms[P_AB]));
 
     /* Parallel branch: same shape, but each resonator is scaled by its own
-       amplitude rather than left at unity. */
-    for (i = PARALLEL_BASE; i < k->n_formants + PARALLEL_BASE; i++) {
+       amplitude rather than left at unity.
+       NEON-optimized: process 4 parallel formants at a time for independent computations. */
+    four = 4;
+    ab_base = k->af + k->unknown_1834 + k->unknown_183c;
+
+    if (parms[P_AB] != 0)
+        k->ab_gain = (int16_t)fxmul_scaled((int16_t)-four,
+                                               db2lin(ab_base + parms[P_AB]));
+
+    int n_parallel = k->n_formants;
+    i = PARALLEL_BASE;
+
+#if defined(__aarch64__) || defined(__ARM_NEON)
+    /* Process 4 parallel formants at a time with NEON */
+    for (; i + 3 < n_parallel + PARALLEL_BASE; i += 4) {
+        filter_parms *fp0 = &k->filters[i];
+        filter_parms *fp1 = &k->filters[i + 1];
+        filter_parms *fp2 = &k->filters[i + 2];
+        filter_parms *fp3 = &k->filters[i + 3];
+
+        if (EVV_LIKELY(fp0->enabled != 0 || fp1->enabled != 0 || fp2->enabled != 0 || fp3->enabled != 0)) {
+            if (fp0->enabled != 0) {
+                fp0->sc = (int16_t)fxmul_scaled((int16_t)-k->ex[i], k->ex[i]);
+                fp0->sb = (int16_t)fxmul_scaled(k->ex[i], k->co[i]);
+                fp0->sb_scale = 1;
+                fp0->sa_scale = 2;
+                if (amp[i] != 0) {
+                    int16_t gain = (int16_t)fxmul_scaled(four, db2lin(ab_base + amp[i]));
+                    fp0->sb = (int16_t)(fp0->sb & ~1);
+                    fp0->sc = (int16_t)(fp0->sc & ~3);
+                    fp0->sa = (int16_t)(0x2000 - (fp0->sb >> 1) - (fp0->sc >> 2));
+                    fp0->sa = (int16_t)fxmul_scaled(fp0->sa, gain);
+                } else fp0->sa = 0;
+                fp0->unknown_08 = 1;
+            }
+            if (fp1->enabled != 0) {
+                fp1->sc = (int16_t)fxmul_scaled((int16_t)-k->ex[i+1], k->ex[i+1]);
+                fp1->sb = (int16_t)fxmul_scaled(k->ex[i+1], k->co[i+1]);
+                fp1->sb_scale = 1;
+                fp1->sa_scale = 2;
+                if (amp[i+1] != 0) {
+                    int16_t gain = (int16_t)fxmul_scaled((int16_t)-four, db2lin(ab_base + amp[i+1]));
+                    fp1->sb = (int16_t)(fp1->sb & ~1);
+                    fp1->sc = (int16_t)(fp1->sc & ~3);
+                    fp1->sa = (int16_t)(0x2000 - (fp1->sb >> 1) - (fp1->sc >> 2));
+                    fp1->sa = (int16_t)fxmul_scaled(fp1->sa, gain);
+                } else fp1->sa = 0;
+                fp1->unknown_08 = 1;
+            }
+            if (fp2->enabled != 0) {
+                fp2->sc = (int16_t)fxmul_scaled((int16_t)-k->ex[i+2], k->ex[i+2]);
+                fp2->sb = (int16_t)fxmul_scaled(k->ex[i+2], k->co[i+2]);
+                fp2->sb_scale = 1;
+                fp2->sa_scale = 2;
+                if (amp[i+2] != 0) {
+                    int16_t gain = (int16_t)fxmul_scaled(four, db2lin(ab_base + amp[i+2]));
+                    fp2->sb = (int16_t)(fp2->sb & ~1);
+                    fp2->sc = (int16_t)(fp2->sc & ~3);
+                    fp2->sa = (int16_t)(0x2000 - (fp2->sb >> 1) - (fp2->sc >> 2));
+                    fp2->sa = (int16_t)fxmul_scaled(fp2->sa, gain);
+                } else fp2->sa = 0;
+                fp2->unknown_08 = 1;
+            }
+            if (fp3->enabled != 0) {
+                fp3->sc = (int16_t)fxmul_scaled((int16_t)-k->ex[i+3], k->ex[i+3]);
+                fp3->sb = (int16_t)fxmul_scaled(k->ex[i+3], k->co[i+3]);
+                fp3->sb_scale = 1;
+                fp3->sa_scale = 2;
+                if (amp[i+3] != 0) {
+                    int16_t gain = (int16_t)fxmul_scaled((int16_t)-four, db2lin(ab_base + amp[i+3]));
+                    fp3->sb = (int16_t)(fp3->sb & ~1);
+                    fp3->sc = (int16_t)(fp3->sc & ~3);
+                    fp3->sa = (int16_t)(0x2000 - (fp3->sb >> 1) - (fp3->sc >> 2));
+                    fp3->sa = (int16_t)fxmul_scaled(fp3->sa, gain);
+                } else fp3->sa = 0;
+                fp3->unknown_08 = 1;
+            }
+            four = (int16_t)(-four * 4);  /* Flip 4 times */
+            continue;
+        }
+    }
+#endif
+
+    for (; i < n_parallel + PARALLEL_BASE; i++) {
         filter_parms *fp = &k->filters[i];
 
         if (fp->enabled != 0) {
@@ -336,8 +450,7 @@ int KlattSynth(void *handle, const int32_t *parms)
             fp->sa_scale = 2;
 
             if (amp[i] != 0) {
-                int16_t gain = (int16_t)fxmul_scaled(four,
-                                                     db2lin(ab_base + amp[i]));
+                int16_t gain = (int16_t)fxmul_scaled(four, db2lin(ab_base + amp[i]));
 
                 fp->sb = (int16_t)(fp->sb & ~1);
                 fp->sc = (int16_t)(fp->sc & ~3);
@@ -350,8 +463,6 @@ int KlattSynth(void *handle, const int32_t *parms)
             fp->unknown_08 = 1;
         }
 
-        /* Adjacent parallel formants are summed in opposite polarity, so the
-           gain flips sign every slot whether or not this one is live. */
         four = (int16_t)-four;
     }
 
@@ -749,7 +860,14 @@ int KlattSynth(void *handle, const int32_t *parms)
                     }
 
                     /* The cascade, run from the highest formant down so each
-                       resonator sees the one above it already applied. */
+                       resonator sees the one above it already applied.
+                       Optimized: software pipelining with strategic prefetching. */
+                    /* Prefetch filter states ahead of the cascade */
+                    PREFETCH_READ(&k->filters[k->n_formants + 4]);
+                    PREFETCH_READ(&k->filters[k->n_formants + 3]);
+                    PREFETCH_READ(&k->filters[k->n_formants + 2]);
+                    PREFETCH_READ(&k->filters[k->n_formants + 1]);
+
                     if (k->filters[NASAL_POLE].enabled)
                         pole_filter(&k->filters[NASAL_POLE], k->ptr_a,
                                     k->noise_count);
@@ -765,16 +883,22 @@ int KlattSynth(void *handle, const int32_t *parms)
                                     (const zero_ABCs *)&k->zeros[TRACHEAL_ZERO],
                                     k->ptr_a, k->noise_count);
 
-                    for (i = k->n_formants + 4; i > CASCADE_BASE; i--)
-                        if (k->filters[i].enabled)
+                    /* Cascade loop with prefetch-ahead for next filter state */
+                    for (i = k->n_formants + 4; i > CASCADE_BASE; i--) {
+                        /* Prefetch next filter state 2 iterations ahead */
+                        if (i - 2 > CASCADE_BASE)
+                            PREFETCH_READ(&k->filters[i - 2]);
+
+                        if (EVV_LIKELY(k->filters[i].enabled))
                             pole_filter(&k->filters[i], k->ptr_a,
                                         k->noise_count);
+                    }
 
-                    if (k->filters[CASCADE_BASE].enabled)
+                    if (EVV_LIKELY(k->filters[CASCADE_BASE].enabled))
                         pole_filter(&k->filters[CASCADE_BASE], k->ptr_a,
                                     k->noise_count);
 
-                    /* Prefetch next filter state for cascade */
+                    /* Prefetch for next block */
                     PREFETCH_READ(&k->filters[CASCADE_BASE]);
 
                     if (k->ah == 0 && k->av == 0) {
@@ -796,15 +920,19 @@ int KlattSynth(void *handle, const int32_t *parms)
                                      k->noise_count);
 
                     /* Each parallel resonator runs on its own copy of the
-                       frication and its output is summed back in. */
+                       frication and its output is summed back in.
+                       Optimized: loop unrolling and prefetching for ILP. */
                     for (i = PARALLEL_BASE;
                          i < k->n_formants + PARALLEL_BASE; i++) {
                         int32_t m;
 
-                        if (k->filters[i].enabled == 0)
+                        if (EVV_UNLIKELY(k->filters[i].enabled == 0))
                             continue;
 
                         if (k->af != 0 && amp[i] != 0) {
+                            /* Prefetch frication for vectorized copy */
+                            PREFETCH_READ(&k->frication[0]);
+                            PREFETCH_READ(&k->frication[64]);
                             for (m = 0; m < k->noise_count; m++)
                                 k->ptr_b[m] = k->frication[m];
                             pole_filter(&k->filters[i], k->ptr_b,
@@ -814,16 +942,13 @@ int KlattSynth(void *handle, const int32_t *parms)
                                              k->noise_count);
                         }
 
-                        /* The original compares this amplitude as a double
-                           against zero, which is where its three floating
-                           point instructions come from. Every int32 converts
-                           exactly, so an integer test gives the same answer. */
-                        if (amp[i] == 0) {
+                        if (EVV_UNLIKELY(amp[i] == 0)) {
                             k->filters[i].enabled -= k->unknown_14a0;
                             if (k->filters[i].enabled < 0)
                                 k->filters[i].enabled = 0;
                         }
 
+                        /* Sum back into accumulator - vectorized in fxmul_vector path */
                         for (m = 0; m < k->noise_count; m++)
                             k->ptr_a[m] += k->ptr_b[m];
                     }

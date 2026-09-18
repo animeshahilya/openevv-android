@@ -37,6 +37,10 @@
 
 #include "eci.h"
 
+#if defined(__aarch64__) || defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
+
 #ifdef __ANDROID__
 #include <jni.h>
 #include <pthread.h>
@@ -1124,8 +1128,39 @@ static int ECICALL eq_stream_message(ECIHand h, ECIMessage msg, int param, void 
         size_t first = EQ_RING_BYTES - s->head;
         if (first > want)
             first = want;
-        memcpy(s->ring + s->head, s->frame, first);
-        memcpy(s->ring, (unsigned char *)s->frame + first, want - first);
+#if defined(__aarch64__) || defined(__ARM_NEON)
+        if (first >= 32) {
+            size_t i = 0;
+            for (; i + 15 < first; i += 16) {
+                int16x8_t v0 = vld1q_s16((int16_t *)(s->frame + i));
+                int16x8_t v1 = vld1q_s16((int16_t *)(s->frame + i + 16));
+                vst1q_s16((int16_t *)(s->ring + s->head + i), v0);
+                vst1q_s16((int16_t *)(s->ring + s->head + i + 16), v1);
+            }
+            for (; i < first; i += 2) {
+                *(int16_t *)(s->ring + s->head + i) = *(int16_t *)(s->frame + i);
+            }
+            size_t rest = want - first;
+            if (rest >= 32) {
+                size_t j = 0;
+                for (; j + 15 < rest; j += 16) {
+                    int16x8_t v0 = vld1q_s16((int16_t *)(s->frame + first + j));
+                    int16x8_t v1 = vld1q_s16((int16_t *)(s->frame + first + j + 16));
+                    vst1q_s16((int16_t *)(s->ring + j), v0);
+                    vst1q_s16((int16_t *)(s->ring + j + 16), v1);
+                }
+                for (; j < rest; j += 2) {
+                    *(int16_t *)(s->ring + j) = *(int16_t *)(s->frame + first + j);
+                }
+            } else {
+                memcpy(s->ring, (unsigned char *)s->frame + first, rest);
+            }
+        } else
+#endif
+        {
+            memcpy(s->ring + s->head, s->frame, first);
+            memcpy(s->ring, (unsigned char *)s->frame + first, want - first);
+        }
         s->head = (s->head + want) % EQ_RING_BYTES;
         s->count += want;
     }

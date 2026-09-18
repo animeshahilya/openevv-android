@@ -131,6 +131,18 @@ uint32_t noise(klatt_state *k, uint32_t seed)
     limit = k->spans[0];
 
     for (j = 0; j < k->smooth_span / 2; j++) {
+#if defined(__aarch64__) || defined(__ARM_NEON)
+        /* NEON-optimized: process 8 samples at a time */
+        int32_t span_len = limit - i;
+        if (span_len >= 8) {
+            int16x8_t v_half = vdupq_n_s16(0x4000);  /* 0.5 in Q14 */
+            for (; i + 7 < limit; i += 8) {
+                int16x8_t v_buf = vld1q_s16(&k->noise_buf[i]);
+                int16x8_t v_res = vshrq_n_s16(v_buf, 1);  /* divide by 2 */
+                vst1q_s16(&k->noise_buf[i], v_res);
+            }
+        }
+#endif
         for (; i < limit; i++)
             k->noise_buf[i] = (int16_t)(k->noise_buf[i] >> 1);
 

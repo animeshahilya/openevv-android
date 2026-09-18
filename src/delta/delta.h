@@ -6,6 +6,14 @@
 
 #include "evv_arena.h"
 
+#if defined(__GNUC__) || defined(__clang__)
+#define EVV_LIKELY(x)   __builtin_expect(!!(x), 1)
+#define EVV_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+#define EVV_LIKELY(x)   (x)
+#define EVV_UNLIKELY(x) (x)
+#endif
+
 /* The Delta machine's working state: one allocation, named fields first and
    then a cell for every global the language declares.
 

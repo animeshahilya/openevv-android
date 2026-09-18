@@ -1450,6 +1450,27 @@ int32_t delta_run_rule(void *state, const delta_rule *r, const int32_t *args,
        fall back to a landing whose frame had already returned. */
     mark = evv_land_mark();
 
+    /* Hot path: inline the native rule dispatch for speed.
+       Cache the by_number pointer in thread-local storage to avoid
+       the double-checked locking pattern on every call. */
+    static __thread delta_rule_cfn *cached_by_number = NULL;
+    static __thread const delta_language *cached_lang = NULL;
+
+    if (EVV_UNLIKELY(cached_lang != lang)) {
+        by_number = *lang->rule_native_by_number;
+        if (by_number == 0)
+            by_number = delta_native_index(lang);
+        cached_by_number = by_number;
+        cached_lang = lang;
+    } else {
+        by_number = cached_by_number;
+    }
+
+    if (EVV_LIKELY(by_number != 0))
+        fn = (EVV_LIKELY(n >= 0 && n < lang->rule_count)) ? by_number[n] : 0;
+    else
+        fn = delta_native_walk(lang, n);
+
     /* The outermost rule of a run plants somewhere for a forced error
        backtrack to go when the rule that asks for one never planted its own.
        Landing here abandons the whole run, which is the only thing that can
