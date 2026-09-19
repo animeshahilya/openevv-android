@@ -495,7 +495,7 @@ Java_com_eloquick_tts_EloQuickEngine_nativeGetSampleRateHz(JNIEnv *env, jclass c
     if (!(ECIHand)(intptr_t)handle)
         return 0;
     int idx = eciGetParam((ECIHand)(intptr_t)handle, 5 /* P_SAMPLE_RATE */);
-    if (idx < 0 || idx >= EQ_RATES)
+    if (idx < 0 || (size_t)idx >= EQ_RATES)
         return 11025;
     return (jint)eq_rate_hz[idx];
 }
@@ -626,7 +626,12 @@ static eq_extra *eq_extra_find_locked(ECIHand h)
     return NULL;
 }
 
-/* Acquire a reference: safe to use after unlock until eq_extra_release. */
+/* Acquire a reference: safe to use after unlock until eq_extra_release.
+ * A new entry starts with TWO references: one held by the list itself
+ * (released by eq_extra_drop on teardown) and one for the caller
+ * (released by eq_extra_release). Without the list's own reference the
+ * first release would free the entry while still linked, leaving a
+ * dangling node for the next lookup to find. */
 static eq_extra *eq_extra_get(ECIHand h)
 {
     eq_extra *e;
@@ -636,7 +641,7 @@ static eq_extra *eq_extra_get(ECIHand h)
         e = (eq_extra *)calloc(1, sizeof(*e));
         if (e) {
             e->handle = h;
-            e->refs = 1;
+            e->refs = 2;
             e->next = eq_extras;
             eq_extras = e;
         }
@@ -1769,7 +1774,7 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamGetSampleRateHz(JNIEnv *env, jc
     if (!s)
         return 0;
     int idx = eciGetParam(s->handle, 5 /* P_SAMPLE_RATE */);
-    if (idx < 0 || idx >= EQ_RATES)
+    if (idx < 0 || (size_t)idx >= EQ_RATES)
         return 11025;
     return (jint)eq_rate_hz[idx];
 }
@@ -2036,7 +2041,7 @@ Java_com_eloquick_tts_EloQuickEngine_nativeGetAudioFormat(JNIEnv *env, jclass cl
     if (!(ECIHand)(intptr_t)handle)
         return NULL;
     rate_idx = eciGetParam((ECIHand)(intptr_t)handle, 5 /* P_SAMPLE_RATE */);
-    if (rate_idx < 0 || rate_idx >= EQ_RATES)
+    if (rate_idx < 0 || (size_t)rate_idx >= EQ_RATES)
         rate_idx = 1;
     format[0] = eq_rate_hz[rate_idx];
     format[1] = 1;  // mono

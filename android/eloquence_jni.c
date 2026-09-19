@@ -119,7 +119,7 @@ typedef struct {
     int   dict_count;
 } eq_stream;
 
-typedef struct {
+typedef struct eq_extra {
     ECIHand handle;
     ECIDictHand dict;
     int refs; /* guarded by eq_extra_lock; entry freed when refs==0 after unlink */
@@ -146,7 +146,13 @@ static eq_extra *eq_extra_find_locked(ECIHand h)
     return NULL;
 }
 
-/* Acquire a reference: safe to use after unlock until eq_extra_release. */
+/* Acquire a reference: safe to use after unlock until eq_extra_release.
+ * A new entry starts with TWO references: one held by the list itself
+ * and one for the caller (released by eq_extra_release). Without the
+ * list's own reference the first release would free the entry while
+ * still linked, leaving a dangling node for the next lookup to find.
+ * Entries live as long as the process here; the slots themselves own
+ * and delete their engine-side dictionaries on destroy. */
 static eq_extra *eq_extra_get(ECIHand h)
 {
     eq_extra *e;
@@ -156,7 +162,7 @@ static eq_extra *eq_extra_get(ECIHand h)
         e = (eq_extra *)calloc(1, sizeof(*e));
         if (e) {
             e->handle = h;
-            e->refs = 1;
+            e->refs = 2;
             e->next = eq_extras;
             eq_extras = e;
         }
@@ -188,49 +194,6 @@ static ECIDictHand eq_extra_dict_snapshot(eq_extra *e)
     d = e->dict;
     pthread_mutex_unlock(&eq_extra_lock);
     return d;
-}
-
-/* Drops the extras for h, releasing engine-side state. Unlinks under lock,
- * then makes engine calls on local copies with no lock held. Answers 1 when
- * something was dropped. Refcounted so a concurrent teach/lookup holding a
- * reference cannot see a freed entry. */
-static int eq_extra_drop(ECIHand h)
-{
-    eq_extra *e, *prev = NULL;
-    ECIDictHand dict = NULL_DICT_HAND;
-    int dropped = 0;
-    pthread_mutex_lock(&eq_extra_lock);
-    e = eq_extras;
-    while (e) {
-        if (e->handle == h) {
-            if (prev)
-                prev->next = e->next;
-            else
-                eq_extras = e->next;
-            dict = e->dict;
-            e->dict = NULL_DICT_HAND;
-            e->refs--;
-            if (e->refs == 0) {
-                pthread_mutex_unlock(&eq_extra_lock);
-                free(e);
-            } else {
-                pthread_mutex_unlock(&eq_extra_lock);
-            }
-            dropped = 1;
-            break;
-        }
-        prev = e;
-        e = e->next;
-    }
-    if (!dropped)
-        pthread_mutex_unlock(&eq_extra_lock);
-    if (!dropped)
-        return 0;
-    if (dict) {
-        eciSetDict(h, NULL_DICT_HAND);
-        eciDeleteDict(h, dict);
-    }
-    return 1;
 }
 
 /* Ensure a dictionary exists for the slot. */
