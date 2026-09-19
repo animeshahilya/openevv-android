@@ -47,9 +47,17 @@ object EloquenceNative {
      * preview player, and the native side's own `> 0 else 11025` fallback,
      * which stays as the last-resort contract for any caller that still
      * passes 0 straight through JNI).
+     *
+     * Only known engine tiers pass through: a corrupt preference (or a
+     * caller passing an arbitrary int) otherwise reaches AudioTrack sizing
+     * math or the HAL, where absurd values throw or over-allocate.
      */
     fun resolveSampleRateHz(requested: Int): Int =
-        if (requested > 0) requested else DEFAULT_SAMPLE_RATE_HZ
+        if (requested in SUPPORTED_SAMPLE_RATES_HZ) requested else DEFAULT_SAMPLE_RATE_HZ
+
+    /** Sample rates the engine actually synthesizes at - keep in sync with
+     * the `-R` tiers in cli/evv.c and VoiceCatalog's rate list. */
+    val SUPPORTED_SAMPLE_RATES_HZ = setOf(8000, 11025, 16000, 22050, 32000, 44100, 48000)
 
     @Volatile
     var isLoaded: Boolean = false

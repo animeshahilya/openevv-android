@@ -215,8 +215,11 @@ private fun buildDictionaryFile(entries: List<PronunciationEntry>, cacheDir: Fil
     if (lines.isEmpty()) return null
 
     val bytes = encodeForEngine(lines.joinToString("\n"), 0)
+    // Per-byte mask: String.format sign-extends a negative Byte to 8 hex
+    // digits ("-1" -> "ffffffff"), which would make the joined hash
+    // variable-length and .take(16) cover as few as 2 digest bytes.
     val hash = MessageDigest.getInstance("SHA-256").digest(bytes)
-        .joinToString("") { "%02x".format(it) }.take(16)
+        .joinToString("") { "%02x".format(Locale.ROOT, it.toInt() and 0xFF) }.take(16)
     val fileName = "${kind.filePrefix}$hash.dic"
     val target = File(cacheDir, fileName)
     if (!target.exists()) {

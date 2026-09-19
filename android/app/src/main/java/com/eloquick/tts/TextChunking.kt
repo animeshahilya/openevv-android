@@ -8,8 +8,16 @@ package com.eloquick.tts
 private val CHUNK_ABBREVIATIONS = setOf(
     "mr", "mrs", "ms", "dr", "st", "sr", "jr", "prof", "rev", "gen",
     "sen", "rep", "gov", "lt", "col", "sgt", "capt", "cmdr", "adm",
-    "vs", "etc", "inc", "ltd", "co", "corp", "ave", "blvd", "rd"
+    "vs", "etc", "inc", "ltd", "co", "corp", "ave", "blvd", "rd",
+    "approx", "fig", "alt", "est", "dept", "univ", "vol", "chap",
+    "sec", "ref", "tel", "ext", "misc", "ed", "trans", "pres", "esq"
 )
+
+// Closers that may sit between a sentence ender and the following space:
+// He said "hi." Then... — the break belongs at the dot, not the quote.
+// Deliberately NOT "." (the ender itself) and not "(" ("(hi. Then" opens,
+// and an ender before an opener is a different animal).
+private val CHUNK_CLOSERS = setOf('"', '\'', ')', ']', '}', '’', '”', '»')
 
 /**
  * True when the '.' at [dotIndex] (followed by whitespace/end) ends a
@@ -49,6 +57,7 @@ fun chunkRangesForSynthesis(text: String, maxChars: Int = 800): List<IntRange> {
     // advances) - clamp to at least one character; callers never pass one,
     // this is defense against a programming error, not a tuning knob.
     val budget = maxChars.coerceAtLeast(1)
+    if (text.isEmpty()) return emptyList()
     if (text.length <= budget) return listOf(0 until text.length)
 
     val ranges = mutableListOf<IntRange>()
@@ -70,12 +79,17 @@ fun chunkRangesForSynthesis(text: String, maxChars: Int = 800): List<IntRange> {
                 if (lastWhitespace == -1) {
                     lastWhitespace = k - start
                 }
-                val prev = text[k - 1]
+                // Step back over closers: He said "hi." Then... ends at
+                // the dot, not the quote. Without this, quoted dialogue
+                // never breaks and chunks cut mid-sentence instead.
+                var j = k - 1
+                while (j > start && text[j] in CHUNK_CLOSERS) j--
+                val prev = text[j]
                 if (prev == '.' || prev == '!' || prev == '?' || prev == '…'
                     || prev == '。' || prev == '！' || prev == '？') {
                     // A dot needs the abbreviation guards; other enders
                     // (!, ?, …, 。！？) always break.
-                    if (prev != '.' || isChunkSentenceEnd(text, k - 1)) {
+                    if (prev != '.' || isChunkSentenceEnd(text, j)) {
                         sentenceBreak = k - start
                         break
                     }

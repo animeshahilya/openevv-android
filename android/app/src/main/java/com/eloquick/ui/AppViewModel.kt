@@ -308,6 +308,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     familyForBcp47(bcp47),
                     cfg.pipelineOptions(),
                 )
+                // The service answers blank text with done() and never
+                // touches native code; the preview must do the same instead
+                // of pointlessly opening an AudioTrack for silence (e.g. a
+                // custom "..." under QUIET stripping).
+                if (previewText.isBlank()) {
+                    if (isCurrent()) {
+                        showError("Nothing to preview after text cleanup.")
+                    }
+                    return@launch
+                }
                 val ok = withContext(Dispatchers.IO) {
                     // Only the user's own dictionary entries - see
                     // mergeDictionaries' own doc comment for why this app no

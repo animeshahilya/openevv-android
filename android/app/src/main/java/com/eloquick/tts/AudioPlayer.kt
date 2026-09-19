@@ -183,7 +183,15 @@ class AudioPlayer(context: Context) {
         // Same resolution rule as the service path (see resolveSampleRateHz)
         // - the two must never disagree about what "Standard" means.
         val effectiveRate = EloquenceNative.resolveSampleRateHz(sampleRateHz)
-        val newTrack = openStreamTrack(effectiveRate)
+        // Guarded: AudioTrack.Builder.build() throws for rate/HAL combos
+        // the device refuses, and that must fail this preview as false
+        // (surfaced by the caller), never escape as an exception.
+        val newTrack = try {
+            openStreamTrack(effectiveRate)
+        } catch (t: Throwable) {
+            Log.w(TAG, "Preview track open failed", t)
+            return false
+        }
         // One instance per speakBlocking call, never reused across calls -
         // see AudioOptimizer's own doc comment for why (stateful filters and
         // limiter gain must not carry stale state into the next preview tap).

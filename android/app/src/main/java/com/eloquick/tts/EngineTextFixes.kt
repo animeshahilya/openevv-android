@@ -47,8 +47,9 @@ private val ENGINE_TEXT_FIXES: List<TextFix> = listOf(
     TextFix(Regex("""([a-zA-Z]+)([~#$%^*(\{|\}\[<\\•])"""), "$1 $2") { text ->
         text.any { isSymbolFollowedChar(it) }
     },
-    // A specific known crash word.
-    TextFix(Regex("(?i)c(ae|æ)sur(e)?"), "seizur") { it.contains("sur", ignoreCase = true) },
+    // A specific known crash word. The trailing (e)? is preserved:
+    // "caesure" must become "seizure", not "seizur".
+    TextFix(Regex("(?i)c(ae|æ)sur(e)?"), "seizur$2") { it.contains("sur", ignoreCase = true) },
     // A time-like digit:digit[st|nd|rd|th] pattern (e.g. "3:30st") can crash.
     TextFix(Regex("(?i)(?<!\\d)(\\d{1,2}):(\\d\\d(?:st|nd|rd|th))"), "$1 $2") {
         it.contains(':') && (it.contains("st", ignoreCase = true) || it.contains("nd", ignoreCase = true) || it.contains("rd", ignoreCase = true) || it.contains("th", ignoreCase = true))
@@ -72,7 +73,10 @@ private val ENGINE_TEXT_FIXES: List<TextFix> = listOf(
     // "books (s)" reads as "books, parenthesis, s...".
     TextFix(Regex("([A-Za-z]+)\\s+(\\(s\\))", RegexOption.IGNORE_CASE), "$1$2") { it.contains("(s)", ignoreCase = true) },
     // ViaVoice doesn't tolerate a space before trailing punctuation.
-    TextFix(Regex("([a-z]+|\\d+|\\W+)\\s+([:.!;,?](?![A-Za-z]|\\d))"), "$1$2") { text ->
+    // [A-Za-z]: shouting/headings ("HELLO !") carry the same stray spaces
+    // as lowercase, and [^\w\s]+ (punctuation only) avoids the old \W+\s+
+    // overlap, which could backtrack across long punct/space runs.
+    TextFix(Regex("([A-Za-z]+|\\d+|[^\\w\\s]+)\\s+([:.!;,?](?![A-Za-z]|\\d))"), "$1$2") { text ->
         text.any { isTrailingPunctuationChar(it) }
     },
     // "2:30:15" or "14:30:15" otherwise announces only the hour and minute.
@@ -485,7 +489,10 @@ private val FRACTION_NAME_MAP: Map<String, String> = mapOf(
 )
 
 private val MIXED_NUMBER_RE = Regex(
-    """\b(\d+)\s*(?:and\s+)?(1/2|1/4|3/4|1/3|2/3|1/8|3/8|5/8|7/8|[½¼¾⅓⅔⅛⅜⅝⅞])\b""",
+    // Trailing (?![/-]): a fraction-shaped prefix of a date span
+    // ("1/2/2024", left raw by applyNaturalDateReading under AS_WRITTEN)
+    // must not rewrite to "1 and a half/2024".
+    """\b(\d+)\s*(?:and\s+)?(1/2|1/4|3/4|1/3|2/3|1/8|3/8|5/8|7/8|[½¼¾⅓⅔⅛⅜⅝⅞])\b(?![/\-])""",
 )
 
 fun applyFractions(text: String): String {
@@ -499,14 +506,23 @@ fun applyFractions(text: String): String {
     }
     if (result.any { it in "½¼¾⅓⅔⅛⅜⅝⅞" }) {
         val sb = StringBuilder(result.length + 16)
-        for (ch in result) {
+        var idx = 0
+        val end = result.length
+        while (idx < end) {
+            val ch = result[idx]
             val name = VULGAR_FRACTIONS[ch]
             if (name != null) {
                 if (sb.isNotEmpty() && !sb.last().isWhitespace()) sb.append(' ')
                 sb.append(name)
+                // Mirror the leading side: "½cup" must become "half cup",
+                // not "halfcup" (see EmojiSpeech.describeEmoji's trailing gap).
+                val next = idx + 1
+                if (next < end && !result[next].isWhitespace()
+                    && (result[next].isLetterOrDigit())) sb.append(' ')
             } else {
                 sb.append(ch)
             }
+            idx++
         }
         result = sb.toString()
     }

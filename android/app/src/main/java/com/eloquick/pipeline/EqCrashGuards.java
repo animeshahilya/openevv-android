@@ -153,7 +153,7 @@ public final class EqCrashGuards {
         if (!ENABLED || text == null || text.isEmpty()) return text == null ? "" : text;
         // Combine some patterns for efficiency - use a single pass where possible
         text = rep(E_MC, text, "$1$2");
-        text = rep(E_CAESUR, text, "seizur");
+        text = rep(E_CAESUR, text, "seizur$2");
         text = rep(E_H_APOS, text, "$1h $2e");
         text = rep(E_HHS, text, "$1 $2$3");
         text = rep(E_HHS_IRON, text, "$1 $2$3");

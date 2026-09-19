@@ -1,5 +1,7 @@
 package com.eloquick.tts
 
+import java.util.Locale
+
 /**
  * Decodes a Roman numeral string (e.g. "IV", "VIII", "LVIII") into an integer,
  * or returns null if invalid or outside 1..3999.
@@ -51,15 +53,18 @@ private val MONARCH_NAME_ONLY_RE = Regex(
  * in prose are never disturbed.
  */
 fun applyContextualRomanNumerals(text: String): String {
-    // Fast path: if text has no Roman-numeral letters, skip regex passes
-    if (!text.any { it == 'I' || it == 'V' || it == 'X' || it == 'L' || it == 'C' || it == 'D' || it == 'M' }) {
+    // Fast path: if text has no Roman-numeral letters, skip regex passes.
+    // Both casings: SECTION_ROMAN_RE is IGNORE_CASE ("world war ii"),
+    // so lowercase must not skip. (MONARCH_* stay case-sensitive on
+    // purpose: lowercase "civil"/"dill" are words, not numerals.)
+    if (!text.any { it in "IVXLCDMivxlcdm" }) {
         return text
     }
 
     // 1. Headings / Sections / Events / Works -> Cardinal numbers ("Chapter 4", "World War 2")
     var result = SECTION_ROMAN_RE.replace(text) { m ->
         val prefix = m.groupValues[1]
-        val roman = m.groupValues[2].uppercase()
+        val roman = m.groupValues[2].uppercase(Locale.ROOT)
         val num = parseRomanNumeral(roman) ?: return@replace m.value
         "$prefix $num"
     }
@@ -68,7 +73,7 @@ fun applyContextualRomanNumerals(text: String): String {
     result = MONARCH_WITH_TITLE_RE.replace(result) { m ->
         val title = m.groupValues[1]
         val name = m.groupValues[2]
-        val roman = m.groupValues[3].uppercase()
+        val roman = m.groupValues[3].uppercase(Locale.ROOT)
         val num = parseRomanNumeral(roman) ?: return@replace m.value
         if (num in 1..31) "$title $name the ${ordinalWord(num)}" else "$title $name $num"
     }
@@ -76,7 +81,7 @@ fun applyContextualRomanNumerals(text: String): String {
     // 3. Known monarch/papal names without explicit title ("Henry VIII" -> "Henry the eighth")
     result = MONARCH_NAME_ONLY_RE.replace(result) { m ->
         val name = m.groupValues[1]
-        val roman = m.groupValues[2].uppercase()
+        val roman = m.groupValues[2].uppercase(Locale.ROOT)
         val num = parseRomanNumeral(roman) ?: return@replace m.value
         if (num in 1..31) "$name the ${ordinalWord(num)}" else "$name $num"
     }

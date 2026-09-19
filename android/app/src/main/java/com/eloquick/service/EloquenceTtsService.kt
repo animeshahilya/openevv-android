@@ -266,8 +266,11 @@ class EloquenceTtsService : TextToSpeechService() {
         // The previous priority is restored below: the framework may reuse
         // this thread for later, non-audio work that must not inherit it.
         val oldPriority = Process.getThreadPriority(Process.myTid())
-        Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
         try {
+            // Inside the try: if raising the priority ever throws, the
+            // request still fails cleanly via callback.error below instead
+            // of escaping the binder thread with the framework waiting.
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
             synthesizeInternal(request, callback)
         } catch (t: Throwable) {
             // A throw anywhere below (pipeline, prefs, dictionary, a dead
@@ -407,7 +410,11 @@ class EloquenceTtsService : TextToSpeechService() {
         // always empty from a Bundle). Falls back to resolving from entries directly only if the
         // provider call itself failed and currentConfig() fell back to a local loadConfig().
         val dictPath = cfg.resolvedDictPath
-            ?: dictionaryFileFor(entriesForLanguage(cfg.pronunciationDictionary, cfg.langId), dictCacheDir)
+            // The resolved utterance language, not cfg.langId (the global
+            // default): a Spanish voice pinned by name on an English-default
+            // install must filter by Spanish, matching what resolveVoice
+            // above synthesized and what the preview path already does.
+            ?: dictionaryFileFor(entriesForLanguage(cfg.pronunciationDictionary, langId), dictCacheDir)
         // Same reasoning as dictPath above, own volume/screen/file - see
         // EloquenceNative.nativeSynthesize's own doc comment on abbvDictPath.
         val abbvDictPath = cfg.resolvedAbbvDictPath
