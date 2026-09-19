@@ -67,6 +67,7 @@ set(OPENEVV_BASE_COMPILE_OPTIONS
     -fdata-sections
     -fvisibility=hidden
     -fPIC
+    -fsigned-char
     -fno-math-errno
     -fno-trapping-math
     -ffp-contract=fast

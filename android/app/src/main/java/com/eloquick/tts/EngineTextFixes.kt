@@ -77,6 +77,13 @@ private val ENGINE_TEXT_FIXES: List<TextFix> = listOf(
     },
     // "2:30:15" or "14:30:15" otherwise announces only the hour and minute.
     TextFix(Regex("(?<!\\d)(\\d{1,2}):(\\d+):(\\d+)"), "$1:$2 $3") { it.contains(':') },
+    // A letter run fused directly onto a digit ("teamtalk5") makes the
+    // engine spell the tail out; splitting keeps it spoken as a word plus
+    // number. Digit-first forms ("1st", "5G", "mp3"-class) are untouched by
+    // construction. Measured on trypsynth/evvdroid's TextFixes.
+    TextFix(Regex("([A-Za-z])(\\d)"), "$1 $2") { text ->
+        text.any { it.isDigit() } && text.any { it.isLetter() }
+    },
 )
 
 private val CURRENCY_ISO_CODES = arrayOf("EUR", "USD", "GBP", "JPY", "INR", "CAD", "AUD", "CHF", "CNY")

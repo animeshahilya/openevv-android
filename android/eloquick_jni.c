@@ -1404,8 +1404,11 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamSpeakWithMarks(JNIEnv *env,
     const char *utf8;
     unsigned char *buf;
     size_t n;
-    jint *mv = NULL;
+    /* Marks via a stack snapshot, not a pinned array: GetIntArrayElements
+       would pin the Java array across eq_stream_idle's blocking wait. */
+    jint mv[EQ_INDEX_QUEUE];
     jsize nm = 0;
+    int have_mv = 0;
     (void)cls;
     if (!s || !text)
         return JNI_FALSE;
@@ -1433,8 +1436,15 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamSpeakWithMarks(JNIEnv *env,
         nm = (*env)->GetArrayLength(env, marks);
         if (nmarks >= 0 && nm > nmarks) nm = nmarks;
         if (nm > EQ_INDEX_QUEUE) nm = EQ_INDEX_QUEUE;
-        if (nm > 0)
-            mv = (*env)->GetIntArrayElements(env, marks, NULL);
+        if (nm > 0) {
+            (*env)->GetIntArrayRegion(env, marks, 0, nm, mv);
+            if ((*env)->ExceptionCheck(env)) {
+                (*env)->ExceptionClear(env);
+                nm = 0;
+            } else {
+                have_mv = 1;
+            }
+        }
     }
     eq_stream_idle(s);
     /* ABRDICT (NVDA-IBMTTS-Driver): eciDictionary 0 = abbreviation expansion
@@ -1454,7 +1464,7 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamSpeakWithMarks(JNIEnv *env,
     s->busy = 1;
     s->head = s->tail = s->count = 0;
     s->mark_count = 0;
-    s->indices_enabled = (mv != NULL);
+    s->indices_enabled = have_mv;
     pthread_mutex_unlock(&s->lock);
     /* buf may reuse s->text (see above): only free the old buffer when
        a fresh one was allocated, otherwise buf IS s->text already. */
@@ -1463,10 +1473,9 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamSpeakWithMarks(JNIEnv *env,
         s->text = buf;
     }
     if (!s->running) {
-        if (mv) (*env)->ReleaseIntArrayElements(env, marks, mv, JNI_ABORT);
         return eq_stream_finished(s);
     }
-    if (mv) {
+    if (have_mv) {
         /* Feed the text in segments, a mark between each: the engine
            enqueues text and marks in call order, and reports a mark when
            synthesis reaches it. One eciAddText per segment also keeps
@@ -1484,10 +1493,8 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamSpeakWithMarks(JNIEnv *env,
         }
         (void)placed;
         if (!eciAddText(s->handle, buf + last)) {
-            (*env)->ReleaseIntArrayElements(env, marks, mv, JNI_ABORT);
             return eq_stream_finished(s);
         }
-        (*env)->ReleaseIntArrayElements(env, marks, mv, JNI_ABORT);
     } else {
         if (!eciAddText(s->handle, buf))
             return eq_stream_finished(s);

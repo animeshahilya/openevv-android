@@ -622,7 +622,7 @@ JNIEXPORT jintArray JNICALL
 Java_com_eloquick_tts_EloquenceNative_nativeGetLanguages(JNIEnv *env, jobject thiz)
 {
     unsigned int langs[64];
-    int n = 64, k;
+    int n = 64;
     jintArray out;
     (void)thiz;
     pthread_once(&evn_init_once, evn_bind_registry);
@@ -633,8 +633,7 @@ Java_com_eloquick_tts_EloquenceNative_nativeGetLanguages(JNIEnv *env, jobject th
     out = (*env)->NewIntArray(env, (jsize)n);
     if (out == NULL)
         return NULL;
-    for (k = 0; k < n; k++)
-        (*env)->SetIntArrayRegion(env, out, (jsize)k, 1, (const jint *)&langs[k]);
+    (*env)->SetIntArrayRegion(env, out, 0, (jsize)n, (const jint *)langs);
     return out;
 }
 
@@ -1045,17 +1044,10 @@ eciSetParam(s->h, 8 /* P_REAL_WORLD_UNITS */, real_world_units ? 1 : 0);
             while (total_silence > 0) {
                 int chunk = total_silence > EVN_FRAME ? EVN_FRAME : total_silence;
                 jbyteArray arr = (*env)->NewByteArray(env, (jsize)(chunk * 2));
-                jbyte *zeros;
                 jboolean go;
                 if (arr == NULL)
                     break;
-                zeros = (jbyte *)calloc(1, (size_t)(chunk * 2));
-                if (zeros == NULL) {
-                    (*env)->DeleteLocalRef(env, arr);
-                    break;
-                }
-                (*env)->SetByteArrayRegion(env, arr, 0, (jsize)(chunk * 2), zeros);
-                free(zeros);
+                /* NewByteArray already zeroes: no calloc + SetRegion needed. */
                 go = (*env)->CallBooleanMethod(env, c.consumer, c.on_chunk,
                         arr, (jint)(chunk * 2));
                 (*env)->DeleteLocalRef(env, arr);

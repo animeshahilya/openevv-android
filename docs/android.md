@@ -246,6 +246,8 @@ All settings live in device-protected `SharedPreferences`, so the directBootAwar
 
 `tools/test_device.py` pushes the ABI build to `/data/local/tmp/eqtest` on the connected phone and runs the full gate: usage, `-L list` (expects all ten languages), `-l` voices, per-language synthesis with WAV validation (RIFF/WAVE, 11025 Hz mono 16-bit, non-silent), repeat-synth determinism (same length; bytes legitimately differ — engine voicing state), EN/DE separation, `evv` compat parity, and the unknown-`-L` error path.
 
+`tools/unicode-test.txt` is a 530-line no-crash corpus (ASCII, composed/decomposed Latin, Greek/Cyrillic/Hebrew/Arabic/Devanagari/CJK, math/symbols, 300+ emoji and ZWJ/tag sequences), vendored byte-identical from stormdragon2976/openevv's `unicode-character-support` branch (`UNICODE-PLAN.md` checkpoint 1): feed it line-by-line through the pipeline and the engine and require no crash and no hang — it documents current behavior, not correct rendering.
+
 ```bash
 # Debug build first (unstripped, -O0 -g -- what you ship to a test phone):
 python tools/build_android.py --abi arm64-v8a --debug

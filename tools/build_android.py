@@ -538,6 +538,9 @@ def build_abi(
         "-fdata-sections",
         "-fvisibility=hidden",
         "-fPIC",
+        # ARM plain char is unsigned, x86/MSVC reference is signed; the
+        # engine compares table bytes as numbers (evvdroid ships the same).
+        "-fsigned-char",
         "-fstrict-aliasing",
         "-fstrict-overflow",
         "-fmerge-all-constants",
