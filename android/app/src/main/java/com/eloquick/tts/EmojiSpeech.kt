@@ -135,8 +135,12 @@ private fun matchEmojiAt(text: String, i: Int): EmojiMatch? {
  * together - what they render as is identical to a listener either way.
  */
 fun describeEmoji(text: String): String {
-    if (text.isEmpty() || EMOJI_NAMES.isEmpty()) return text
-    if (!mightContainEmoji(text)) return text
+    // Cheap filter first: EMOJI_NAMES is a ~6k-entry lazy load, and the
+    // first-ever plain-prose utterance must not pay a full resource parse
+    // for nothing. (Empty after the filter still returns text, so a failed
+    // load behaves exactly as before.)
+    if (text.isEmpty() || !mightContainEmoji(text)) return text
+    if (EMOJI_NAMES.isEmpty()) return text
 
     val sb = StringBuilder(text.length + 16)
     val len = text.length

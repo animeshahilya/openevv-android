@@ -52,8 +52,8 @@
 static const char CMD_RATE_8000[] = "`esr0";
 static const char CMD_RATE_11025[] = "`esr1";
 
-/* Fast inline: check if text needs recoding (has non-ASCII chars) */
-static inline int stw_needsRecoding(const char *text, int32_t len)
+/* Fast path: check if text needs recoding (has non-ASCII chars) */
+static inline int stw_textNeedsRecoding(const char *text, int32_t len)
 {
     if (len <= 0)
         return 0;
@@ -116,11 +116,6 @@ static inline int stw_utf8ToLatin1(const char *src, int32_t len, char *dst)
     return j;
 }
 
-/* Fast path: check if text needs recoding */
-static inline int stw_textNeedsRecoding(const char *text, int32_t len)
-{
-    return stw_needsRecoding(text, len);
-}
 #define ENG_ASK            0x00
 #define ENG_ADD_TEXT       0x14
 #define ENG_COMMAND        0x18
@@ -477,11 +472,9 @@ THIS void stw_addTextToEngine(SynthThread *t, char *text, int32_t len)
         return;
     }
 
+    /* stw_utf8ToLatin1 returns a count, never negative: Latin-1 output
+       is always shorter than the UTF-8 input, so len + 1 always holds. */
     int32_t out_len = stw_utf8ToLatin1(text, len, copy);
-    if (out_len < 0) {
-        cpp_delete(copy);
-        return;
-    }
     copy[out_len] = 0;
 
     if (out_len > 0 && copy[out_len - 1] != ' ')

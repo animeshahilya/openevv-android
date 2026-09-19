@@ -31,6 +31,7 @@ import com.eloquick.tts.LanguageFamily
 import com.eloquick.tts.dictionaryFileFor
 import com.eloquick.tts.entriesForLanguage
 import com.eloquick.tts.encodeForEngineWithOffsets
+import com.eloquick.tts.countryMatches
 import com.eloquick.tts.familyForLangId
 import com.eloquick.tts.isValidPreset
 import com.eloquick.tts.localeFor
@@ -144,7 +145,10 @@ class EloquenceTtsService : TextToSpeechService() {
     override fun onIsLanguageAvailable(lang: String?, country: String?, variant: String?): Int {
         val match = matchLanguage(lang, country) ?: return TextToSpeech.LANG_NOT_SUPPORTED
         val loc = localeFor(match.bcp47)
-        return if (!country.isNullOrEmpty() && loc.country.equals(country, ignoreCase = true)) {
+        // ISO-3-aware like matchLanguage itself: the framework queries
+        // "eng"/"USA", and a raw country equals would downgrade every such
+        // query from COUNTRY_AVAILABLE to merely AVAILABLE.
+        return if (!country.isNullOrEmpty() && countryMatches(loc, country)) {
             TextToSpeech.LANG_COUNTRY_AVAILABLE
         } else {
             TextToSpeech.LANG_AVAILABLE
@@ -521,7 +525,11 @@ class EloquenceTtsService : TextToSpeechService() {
                 // request.
                 val chunkCharOffset = chunkByteToChar?.getOrNull(charOffset.coerceIn(0, (chunkByteToChar?.size ?: 1) - 1)) ?: 0
                 val end = clampHighlightEnd(lastMark, chunkBaseOffset + chunkCharOffset, rawText.length)
-                if (end != null && end > lastMark) {
+                // deliveredBytes > 0: a mark arriving before any audio would
+                // otherwise fire rangeStart(0, 0, end), which some hosts
+                // reject. Skipping leaves lastMark for the next mark, whose
+                // range then simply starts from further back.
+                if (end != null && end > lastMark && deliveredBytes > 0) {
                     val deliveredFrames = deliveredBytes / 2
                     runCatching { callback.rangeStart(deliveredFrames, lastMark, end) }
                     lastMark = end

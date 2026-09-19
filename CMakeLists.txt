@@ -105,7 +105,6 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel"
         -ftree-vectorize
         -fvect-cost-model=very-cheap
         -fno-ident
-        -fno-math-errno
         -fno-unwind-tables
         -fno-asynchronous-unwind-tables
     )

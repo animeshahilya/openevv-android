@@ -661,7 +661,10 @@ static int32_t sendString(SynthThread *t, uint32_t type,
             m->text = 0;
             m->seq = seq;
             m->text = strdup(text);
-            rc = postAndCommit(t, &m->base, seq, 1, 1);
+            if (m->text)
+                rc = postAndCommit(t, &m->base, seq, 1, 1);
+            else
+                destroy_insertStringIndex(&m->base, 1);
         }
         if (rc != OK && opened)
             snd_close(ST_SOUND(t));
@@ -690,6 +693,8 @@ THIS int32_t st_addText(SynthThread *t, char *text, uint32_t len,
             ctor_addText(m, t, text, len, seq, last);
         if (m && m->text)
             rc = postAndCommit(t, &m->base, seq, (int32_t)len, 1);
+        else if (m)
+            destroy_addText(&m->base, 1);
         if (rc != OK && opened)
             snd_close(ST_SOUND(t));
     }
@@ -714,6 +719,8 @@ THIS int32_t st_addParam(SynthThread *t, char *text, uint32_t len)
             ctor_addParam(m, t, text, len, seq);
         if (m && m->text)
             rc = postAndCommit(t, &m->base, seq, (int32_t)len, 1);
+        else if (m)
+            destroy_addParam(&m->base, 1);
         if (rc != OK && opened)
             snd_close(ST_SOUND(t));
     }

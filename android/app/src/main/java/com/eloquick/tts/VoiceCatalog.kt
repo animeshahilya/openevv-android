@@ -140,7 +140,7 @@ fun familyForLangId(langId: Int): LanguageFamily = when (langId ushr 16) {
     else -> LanguageFamily.OTHER
 }
 
-fun familyForBcp47(bcp47: String): LanguageFamily = when (bcp47.substringBefore('-').lowercase()) {
+fun familyForBcp47(bcp47: String): LanguageFamily = when (bcp47.substringBefore('-').lowercase(Locale.ROOT)) {
     "en" -> LanguageFamily.ENGLISH
     "es" -> LanguageFamily.SPANISH
     "fr" -> LanguageFamily.FRENCH
@@ -181,8 +181,11 @@ private fun languageMatches(loc: Locale, code: String): Boolean =
         runCatching { loc.isO3Language }.getOrNull()?.equals(code, ignoreCase = true) == true
 
 /** As [languageMatches], but for the country/region part - ISO 3166-1
- * alpha-2 ("US") vs. alpha-3 ("USA"). */
-private fun countryMatches(loc: Locale, code: String): Boolean =
+ * alpha-2 ("US") vs. alpha-3 ("USA"). Internal (not private) so
+ * [com.eloquick.service.EloquenceTtsService.onIsLanguageAvailable] can
+ * apply the same ISO-3-aware rule instead of a raw equals that would
+ * downgrade every framework "USA" query to LANG_AVAILABLE. */
+internal fun countryMatches(loc: Locale, code: String): Boolean =
     loc.country.equals(code, ignoreCase = true) ||
         runCatching { loc.isO3Country }.getOrNull()?.equals(code, ignoreCase = true) == true
 

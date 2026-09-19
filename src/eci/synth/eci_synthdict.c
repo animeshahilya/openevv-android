@@ -200,12 +200,13 @@ THIS int32_t std_convertToECIinputText(SynthThread *t, const char *in,
     *outLen = 0;
 
     if (mode == 0) {
-        made = (char *)cpp_new((uint32_t)strlen(in) + 1);
+        size_t n = strlen(in);
+        made = (char *)cpp_new((uint32_t)n + 1);
         if (!made)
             return ERR_NO_MEMORY;
-        strcpy(made, in);
+        memcpy(made, in, n + 1);
         *out = made;
-        *outLen = (int32_t)strlen(in) + 1;
+        *outLen = (int32_t)n + 1;
         return OK;
     }
     if (mode != TEXT_MODE_ROM)

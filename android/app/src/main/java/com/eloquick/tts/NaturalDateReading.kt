@@ -67,7 +67,10 @@ enum class DateOrder(val label: String) {
  * quietly changing what an existing install reads out loud.
  */
 fun applyNaturalDateReading(text: String, order: DateOrder = DateOrder.AS_WRITTEN): String {
-    if (!text.any { it == '/' || it == '-' }) return text
+    // Dates need digits as well as separators: without this, every
+    // hyphenated utterance ("well-known", "state-of-the-art") pays a
+    // full DATE_RE scan that cannot match.
+    if (!text.any { it == '/' || it == '-' } || !text.any { it.isDigit() }) return text
     return DATE_RE.replace(text) { m ->
         val raw = m.value
         if (raw in NON_DATE_IDIOMS) return@replace raw

@@ -1,5 +1,7 @@
 package com.eloquick.tts
 
+import java.util.Locale
+
 /**
  * A curated set of text-normalization fixes for known crash/mispronunciation
  * patterns in the Eloquence/ViaVoice engine family, ported from two NVDA
@@ -176,16 +178,21 @@ fun splitMixedCase(text: String): String {
 /**
  * Joins thousands-grouping commas of any length ("1,000,000,000" ->
  * "1000000000") so the engine never reads a "comma hundred" mid-number.
- * Only strict Western grouping is touched (`\d{1,3}` followed by one or
- * more `,\d{3}` groups) - a European decimal comma ("3,14") or anything
- * else oddly-shaped is left exactly alone rather than guessed at.
+ * Only strict Western grouping is touched: every comma group past the
+ * first must be exactly 3 digits. A European decimal comma ("3,14") or
+ * Indian-typed grouping ("12,34,567") is left exactly alone rather than
+ * guessed at - the old per-match replace turned the latter into the
+ * corrupt "12,34567" by stripping only its Western tail.
  */
 fun joinThousandsCommas(text: String): String {
     if (!text.contains(',')) return text
-    return THOUSANDS_GROUP_RE.replace(text) { m -> m.value.replace(",", "") }
+    return THOUSANDS_GROUP_RE.replace(text) { m ->
+        if (m.value.split(",").drop(1).all { it.length == 3 }) m.value.replace(",", "")
+        else m.value
+    }
 }
 
-private val THOUSANDS_GROUP_RE = Regex("""\b\d{1,3}((?:,\d{3})+)\b""")
+private val THOUSANDS_GROUP_RE = Regex("""\b\d{1,3}(?:,\d{1,3})+\b""")
 
 /**
  * How a large number gets spoken - the one thing about a number that
@@ -544,7 +551,7 @@ fun applyTemperatures(text: String): String {
     if (!text.contains('°')) return text
     return TEMPERATURE_RE.replace(text) { m ->
         val signAndNum = m.groupValues[1]
-        val unit = m.groupValues[2].uppercase()
+        val unit = m.groupValues[2].uppercase(Locale.ROOT)
         val num = if (signAndNum.startsWith("-")) "minus ${signAndNum.substring(1)}" else signAndNum
         "$num degrees $unit"
     }
@@ -557,7 +564,7 @@ fun applyCurrencyMagnitudes(text: String): String {
     return CURRENCY_MAGNITUDE_RE.replace(text) { m ->
         val symbol = m.groupValues[1]
         val amount = m.groupValues[2]
-        val mag = when (m.groupValues[3].uppercase()) {
+        val mag = when (m.groupValues[3].uppercase(Locale.ROOT)) {
             "K" -> "thousand"
             "M" -> "million"
             "B" -> "billion"

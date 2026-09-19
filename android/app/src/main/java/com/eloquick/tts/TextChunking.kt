@@ -97,12 +97,24 @@ fun chunkRangesForSynthesis(text: String, maxChars: Int = 800): List<IntRange> {
             }
             k--
         }
-        val breakAt = if (sentenceBreak != -1) {
+        // Never split a surrogate pair: the no-whitespace fallback lands
+        // on a raw character count, which can straddle an astral glyph and
+        // hand the engine half a code point. Whitespace breaks are safe by
+        // construction (a break sits before BMP whitespace, so a high
+        // surrogate at a chunk end is always followed by its low inside
+        // the chunk) - only the budget fallback can straddle, and only in
+        // the high|low direction, fixed by extending past the pair.
+        var breakAt = if (sentenceBreak != -1) {
             sentenceBreak
         } else if (lastWhitespace > 0) {
             lastWhitespace
         } else {
             budget
+        }
+        if (start + breakAt < textLen
+            && Character.isHighSurrogate(text[start + breakAt - 1])
+            && Character.isLowSurrogate(text[start + breakAt])) {
+            breakAt++
         }
 
         ranges.add(start until (start + breakAt))
