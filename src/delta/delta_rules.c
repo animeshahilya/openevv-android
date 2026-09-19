@@ -82,8 +82,9 @@ extern int delta_rule_trace;
 /* Which rule is running, so that a run can be told about in the same terms
    as a run of the original: only the calls that leave the object they were
    compiled in can be seen there, because the others were renamed along with
-   the definitions they reach. */
-static const delta_rule *delta_rule_here;
+   the definitions they reach. Per-thread: two engine instances synthesize
+   on their own threads and each nests rules independently. */
+static __thread const delta_rule *delta_rule_here;
 
 typedef struct {
     int32_t        reg[NREG];
@@ -377,21 +378,18 @@ static void step(interp *st)
 
     switch (op) {
     case OP_CALL: {
-        int32_t a[MAXARG];
         uint16_t which = get16(p);
-        int n, i;
+        int n;
 
         p += 2;
         n = *p++;
         {
             int want = *p++;
 
-            if (delta_rule_trace && want != st->argn && want < 255)
+            if (EVV_UNLIKELY(delta_rule_trace) && want != st->argn && want < 255)
                 fprintf(stderr, "# %s: %d in the area, %d expected\n",
                         delta_rule_entry_name[which], st->argn, want);
         }
-        (void)a;
-        (void)i;
         st->reg[0] = delta_rule_called(which, st->arg, st->argn, n);
         break;
     }
@@ -1187,12 +1185,12 @@ int32_t delta_rule_called(int which, const int32_t *stack, int argn, int want)
     for (i = 0; i < want && i < MAXARG; i++)
         a[i] = (argn - 1 - i >= 0) ? stack[argn - 1 - i] : 0;
 
-    if (delta_rule_trace && delta_rule_here != 0
+    if (EVV_UNLIKELY(delta_rule_trace) && delta_rule_here != 0
         && strcmp(delta_rule_entry_name[which], "backtrack_function") == 0) {
         fprintf(stderr, "# %s dispatches\n", delta_rule_here->name);
         fflush(stderr);
     }
-    if (delta_rule_trace > 1) {
+    if (EVV_UNLIKELY(delta_rule_trace > 1)) {
         int j;
 
         fprintf(stderr, "  %s(", delta_rule_entry_name[which]);
@@ -1215,7 +1213,7 @@ int32_t delta_rule_called(int which, const int32_t *stack, int argn, int want)
 EVV_HOT
 int32_t delta_rule_direct(int which, const int32_t *a, int n)
 {
-    if (delta_rule_trace > 1) {
+    if (EVV_UNLIKELY(delta_rule_trace > 1)) {
         int j;
 
         fprintf(stderr, "  %s(", delta_rule_entry_name[which]);
@@ -1404,7 +1402,7 @@ int32_t delta_run_rule(void *state, const delta_rule *r, const int32_t *args,
         if (delta_rule_trace)
             atexit(delta_rule_report);
     }
-    if (delta_rule_trace
+    if (EVV_UNLIKELY(delta_rule_trace)
         && (delta_rule_here == 0
             || strcmp(delta_rule_here->object, r->object) != 0)) {
         int j;
@@ -1415,7 +1413,7 @@ int32_t delta_run_rule(void *state, const delta_rule *r, const int32_t *args,
             fprintf(stderr, "%s%08x", j ? ", " : "", (unsigned)args[j]);
         fprintf(stderr, ")\n");
         fflush(stderr);
-    } else if (delta_rule_trace) {
+    } else if (EVV_UNLIKELY(delta_rule_trace)) {
         fprintf(stderr, "# %s\n", r->name);
         fflush(stderr);
     }

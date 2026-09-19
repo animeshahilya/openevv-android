@@ -160,12 +160,14 @@ uint32_t noise(klatt_state *k, uint32_t seed)
     return seed;
 }
 
+EVV_HOT
 void compute_v_start(klatt_state *k)
 {
     k->v_start = k->v_start + mul32(k->voicing_size, 1000)
                - mul32(k->cp.sample_rate, 10000) / k->f0;
 }
 
+EVV_HOT
 void compute_voicing_size(klatt_state *k)
 {
     k->voicing_size =

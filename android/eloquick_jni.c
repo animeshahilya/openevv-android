@@ -101,9 +101,15 @@ void evvRunStaticInitialisers(void);
 static int eq_utf8_valid(const char *s, size_t n)
 {
     size_t i = 0;
-    /* ASCII fast-path: if no bytes >= 0x80, the string is valid UTF-8. */
-    if (memchr(s, 0x80, n) == NULL)
+    /* ASCII fast-path: if no bytes with the high bit set, valid UTF-8.
+       (memchr for a single 0x80 value is wrong: most non-ASCII bytes are
+       != 0x80, e.g. 0xC3 0xA9 for U+00E9.) */
+    size_t k = 0;
+    while (k < n && ((unsigned char)s[k] & 0x80) == 0)
+        k++;
+    if (k == n)
         return 1;
+    i = k;
     while (i < n) {
         unsigned char c = (unsigned char)s[i];
         size_t need;
@@ -113,8 +119,8 @@ static int eq_utf8_valid(const char *s, size_t n)
         else if ((c & 0xF8) == 0xF0) need = 3;
         else return 0;
         if (i + need >= n) return 0;
-        for (size_t k = 1; k <= need; k++)
-            if (((unsigned char)s[i + k] & 0xC0) != 0x80) return 0;
+        for (size_t j = 1; j <= need; j++)
+            if (((unsigned char)s[i + j] & 0xC0) != 0x80) return 0;
         i += need + 1;
     }
     return 1;
@@ -1129,28 +1135,32 @@ static int ECICALL eq_stream_message(ECIHand h, ECIMessage msg, int param, void 
         if (first > want)
             first = want;
 #if defined(__aarch64__) || defined(__ARM_NEON)
+        /* NEON ring copy. first/want/head are BYTE counts; frame is
+           short[] so all addresses must be computed in bytes first
+           ((short*)(frame)+i would scale i by 2). */
         if (first >= 32) {
+            const unsigned char *fbase = (const unsigned char *)s->frame;
             size_t i = 0;
             for (; i + 15 < first; i += 16) {
-                int16x8_t v0 = vld1q_s16((int16_t *)(s->frame + i));
-                int16x8_t v1 = vld1q_s16((int16_t *)(s->frame + i + 16));
+                int16x8_t v0 = vld1q_s16((const int16_t *)(fbase + i));
+                int16x8_t v1 = vld1q_s16((const int16_t *)(fbase + i + 16));
                 vst1q_s16((int16_t *)(s->ring + s->head + i), v0);
                 vst1q_s16((int16_t *)(s->ring + s->head + i + 16), v1);
             }
             for (; i < first; i += 2) {
-                *(int16_t *)(s->ring + s->head + i) = *(int16_t *)(s->frame + i);
+                *(int16_t *)(s->ring + s->head + i) = *(const int16_t *)(fbase + i);
             }
             size_t rest = want - first;
             if (rest >= 32) {
                 size_t j = 0;
                 for (; j + 15 < rest; j += 16) {
-                    int16x8_t v0 = vld1q_s16((int16_t *)(s->frame + first + j));
-                    int16x8_t v1 = vld1q_s16((int16_t *)(s->frame + first + j + 16));
+                    int16x8_t v0 = vld1q_s16((const int16_t *)(fbase + first + j));
+                    int16x8_t v1 = vld1q_s16((const int16_t *)(fbase + first + j + 16));
                     vst1q_s16((int16_t *)(s->ring + j), v0);
                     vst1q_s16((int16_t *)(s->ring + j + 16), v1);
                 }
                 for (; j < rest; j += 2) {
-                    *(int16_t *)(s->ring + j) = *(int16_t *)(s->frame + first + j);
+                    *(int16_t *)(s->ring + j) = *(const int16_t *)(fbase + first + j);
                 }
             } else {
                 memcpy(s->ring, (unsigned char *)s->frame + first, rest);
@@ -1446,8 +1456,12 @@ Java_com_eloquick_tts_EloQuickEngine_nativeStreamSpeakWithMarks(JNIEnv *env,
     s->mark_count = 0;
     s->indices_enabled = (mv != NULL);
     pthread_mutex_unlock(&s->lock);
-    free(s->text);
-    s->text = buf;
+    /* buf may reuse s->text (see above): only free the old buffer when
+       a fresh one was allocated, otherwise buf IS s->text already. */
+    if (buf != s->text) {
+        free(s->text);
+        s->text = buf;
+    }
     if (!s->running) {
         if (mv) (*env)->ReleaseIntArrayElements(env, marks, mv, JNI_ABORT);
         return eq_stream_finished(s);

@@ -203,8 +203,9 @@ public final class EqClauses {
 
         int n = text.length();
         // Classify per char (0 = native, 1 = latin, -1 = neutral) + forward pass + digit override.
-        int[] kind = new int[n];
-        int[] resolved = new int[n];
+        // byte[] is enough for {-1,0,1} and quarters the temp allocation vs int[].
+        byte[] kind = new byte[n];
+        byte[] resolved = new byte[n];
         int last = 0;
         for (int i = 0; i < n;) {
             int cp = text.codePointAt(i);
@@ -212,13 +213,15 @@ public final class EqClauses {
             int k = isLatinLetter(cp) ? 1 : (isNeutral(cp) ? -1 : 0);
             // Digit override: digits are always native (0)
             if (Character.isDigit(cp)) k = 0;
+            byte kb = (byte) k;
             for (int j = i; j < i + cl && j < n; j++) {
-                kind[j] = k;
+                kind[j] = kb;
             }
             // Forward pass inline
             if (k >= 0) last = k;
+            byte lb = (byte) last;
             for (int j = i; j < i + cl && j < n; j++) {
-                resolved[j] = last;
+                resolved[j] = lb;
             }
             i += cl;
         }
@@ -230,7 +233,7 @@ public final class EqClauses {
             else if (kind[i] >= 0) next = resolved[i];
         }
         // Group consecutive same-script characters.
-        List<Segment> out = new ArrayList<>();
+        List<Segment> out = new ArrayList<>(Math.min(n / 20 + 2, 64));
         int start = 0;
         for (int i = 1; i <= n; i++) {
             if (i == n || resolved[i] != resolved[start]) {

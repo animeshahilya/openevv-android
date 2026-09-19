@@ -42,6 +42,20 @@ public final class EqCrashGuards {
     /** Global kill-switch; when false every method returns its input. */
     public static boolean ENABLED = true;
 
+    // Precompiled rstrip (String.replaceAll compiles a Pattern per call).
+    private static final Pattern RSTRIP = Pattern.compile("\\s+$");
+
+    /**
+     * Guarded replace: returns {@code text} untouched (no copy) when the
+     * pattern does not occur, instead of paying replaceAll's full copy.
+     * Same output as {@code p.matcher(text).replaceAll(repl)} on a hit.
+     */
+    private static String rep(Pattern p, String text, String repl) {
+        java.util.regex.Matcher m = p.matcher(text);
+        if (!m.find()) return text;
+        return m.replaceAll(repl);
+    }
+
     /**
      * When true, embedded backquote commands ({@code `vs}}, {@code `p1},
      * voice tags) are preserved and the backquote strip is skipped. Default
@@ -68,11 +82,11 @@ public final class EqCrashGuards {
 
     public static String globalFixes(String text) {
         if (!ENABLED || text == null || text.isEmpty()) return text == null ? "" : text;
-        text = G1_WORD_BEFORE_MARK.matcher(text).replaceAll("$1 $2");
-        text = G2_PARENS_S.matcher(text).replaceAll("$1$2");
-        text = G3_SPACE_BEFORE_PUNCT.matcher(text).replaceAll("$1$2");
-        text = G4_OPEN_BRACKETS.matcher(text).replaceAll("$1$2");
-        text = G5_CLOSE_BRACKETS.matcher(text).replaceAll("$1$2");
+        text = rep(G1_WORD_BEFORE_MARK, text, "$1 $2");
+        text = rep(G2_PARENS_S, text, "$1$2");
+        text = rep(G3_SPACE_BEFORE_PUNCT, text, "$1$2");
+        text = rep(G4_OPEN_BRACKETS, text, "$1$2");
+        text = rep(G5_CLOSE_BRACKETS, text, "$1$2");
         return text;
     }
 
@@ -84,7 +98,7 @@ public final class EqCrashGuards {
     private static final Pattern E_CAESUR =
             Pattern.compile("c(ae|\u00E6)sur(e)?", Pattern.CASE_INSENSITIVE);
     private static final Pattern E_H_APOS =
-            Pattern.compile("\\b(|\\d+|\\W+)h'(r|v)[e]", Pattern.CASE_INSENSITIVE);
+            Pattern.compile("\\b(\\d+|\\W+)?h'(r|v)[e]", Pattern.CASE_INSENSITIVE);
     private static final Pattern E_HHS =
             Pattern.compile("\\b(\\w+[bdfhjlmnqrvyz])(h[he]s)([abcdefghjklmnopqrstvwy]\\w+)\\b",
                     Pattern.CASE_INSENSITIVE);
@@ -127,36 +141,39 @@ public final class EqCrashGuards {
             Pattern.compile("(\\d+)\\s*([-+*^/])\\s*(\\d+)(,)(00\\b)", Pattern.CASE_INSENSITIVE);
     private static final Pattern E_ARITH_F =
             Pattern.compile("(\\d+)\\s*([-+*^/])\\s*(\\d+)(,)(0{4,})", Pattern.CASE_INSENSITIVE);
-// Combined comma pattern: matches 3-6 comma groups in one pass
+// Combined comma pattern: matches 3-6 comma groups in one pass.
+// The (?=\d{1,3},) lookahead requires at least one comma so bare
+// numbers ("123") never match (all groups are optional otherwise,
+// which would force a copy on every 1-3 digit number).
     private static final Pattern E_COMMA_COMBINED =
-            Pattern.compile("\\b(\\d{1,3})(?:,(000))?(?:,(\\d{1,3}))?(?:,(\\d{1,3}))?(?:,(\\d{1,3}))?\\b");
+            Pattern.compile("\\b(?=\\d{1,3},)(\\d{1,3})(?:,(000))?(?:,(\\d{1,3}))?(?:,(\\d{1,3}))?(?:,(\\d{1,3}))?\\b");
     private static final String E_COMMA_REPLACEMENT = "$1$2$3$4$5";
 
     public static String englishIbmFixes(String text) {
         if (!ENABLED || text == null || text.isEmpty()) return text == null ? "" : text;
         // Combine some patterns for efficiency - use a single pass where possible
-        text = E_MC.matcher(text).replaceAll("$1$2");
-        text = E_CAESUR.matcher(text).replaceAll("seizur");
-        text = E_H_APOS.matcher(text).replaceAll("$1h $2e");
-        text = E_HHS.matcher(text).replaceAll("$1 $2$3");
-        text = E_HHS_IRON.matcher(text).replaceAll("$1 $2$3");
-        text = E_APOS_HHS_A.matcher(text).replaceAll("$1 $2$3");
-        text = E_APOS_HHS_B.matcher(text).replaceAll("$1 $2$3");
-        text = E_TIME_ORD.matcher(text).replaceAll("$1 $2");
-        text = E_CONS_APOS.matcher(text).replaceAll("$1 $2 $3");
-        text = E_YOURE.matcher(text).replaceAll("$1 $2 $3");
-        text = E_COSP.matcher(text).replaceAll("$1kosp");
-        text = E_TZSCHE.matcher(text).replaceAll("$1 $2 $3 $4 $5 tz sche");
-        text = E_JUAR.matcher(text).replaceAll("$1 $2");
-        text = E_URL.matcher(text).replaceAll("$1$2$3$4 $5$6");
-        text = E_ARITH_A.matcher(text).replaceAll("$1$2$3$4$5$6 $7");
-        text = E_ARITH_B.matcher(text).replaceAll("$1$2$3$4 $5$6$7");
-        text = E_ARITH_C.matcher(text).replaceAll("$1$2$3$4$5 $6");
-        text = E_ARITH_D.matcher(text).replaceAll("$1$2$3$4 $5$6$7");
-        text = E_ARITH_E.matcher(text).replaceAll("$1$2$3$4 $5");
-        text = E_ARITH_F.matcher(text).replaceAll("$1$2$3$4 $5");
+        text = rep(E_MC, text, "$1$2");
+        text = rep(E_CAESUR, text, "seizur");
+        text = rep(E_H_APOS, text, "$1h $2e");
+        text = rep(E_HHS, text, "$1 $2$3");
+        text = rep(E_HHS_IRON, text, "$1 $2$3");
+        text = rep(E_APOS_HHS_A, text, "$1 $2$3");
+        text = rep(E_APOS_HHS_B, text, "$1 $2$3");
+        text = rep(E_TIME_ORD, text, "$1 $2");
+        text = rep(E_CONS_APOS, text, "$1 $2 $3");
+        text = rep(E_YOURE, text, "$1 $2 $3");
+        text = rep(E_COSP, text, "$1kosp");
+        text = rep(E_TZSCHE, text, "$1 $2 $3 $4 $5 tz sche");
+        text = rep(E_JUAR, text, "$1 $2");
+        text = rep(E_URL, text, "$1$2$3$4 $5$6");
+        text = rep(E_ARITH_A, text, "$1$2$3$4$5$6 $7");
+        text = rep(E_ARITH_B, text, "$1$2$3$4 $5$6$7");
+        text = rep(E_ARITH_C, text, "$1$2$3$4$5 $6");
+        text = rep(E_ARITH_D, text, "$1$2$3$4 $5$6$7");
+        text = rep(E_ARITH_E, text, "$1$2$3$4 $5");
+        text = rep(E_ARITH_F, text, "$1$2$3$4 $5");
         // Use combined comma pattern for single-pass replacement
-        text = E_COMMA_COMBINED.matcher(text).replaceAll(E_COMMA_REPLACEMENT);
+        text = rep(E_COMMA_COMBINED, text, E_COMMA_REPLACEMENT);
         return text;
     }
 
@@ -174,9 +191,9 @@ public final class EqCrashGuards {
 
     public static String germanIbmFixes(String text) {
         if (!ENABLED || text == null || text.isEmpty()) return text == null ? "" : text;
-        text = DE_DANE.matcher(text).replaceAll("dane `0 ben");
-        text = DE_DAGE.matcher(text).replaceAll("dage `0 gen");
-        text = DE_GENERAL_EN.matcher(text).replaceAll("$1 `0 $3");
+        text = rep(DE_DANE, text, "dane `0 ben");
+        text = rep(DE_DAGE, text, "dage `0 gen");
+        text = rep(DE_GENERAL_EN, text, "$1 `0 $3");
         return text;
     }
 
@@ -196,10 +213,10 @@ public final class EqCrashGuards {
 
     public static String spanishIbmFixes(String text) {
         if (!ENABLED || text == null || text.isEmpty()) return text == null ? "" : text;
-        text = ES_TIME.matcher(text).replaceAll("$1:$2:$3");
-        text = ES_GROUP.matcher(text).replaceAll("$1  $2");
-        text = ES_ORD_SHORT.matcher(text).replaceAll("$1 $2");
-        text = ES_ORD_LONG.matcher(text).replaceAll("$1 $2");
+        text = rep(ES_TIME, text, "$1:$2:$3");
+        text = rep(ES_GROUP, text, "$1  $2");
+        text = rep(ES_ORD_SHORT, text, "$1 $2");
+        text = rep(ES_ORD_LONG, text, "$1 $2");
         return text;
     }
 
@@ -211,7 +228,7 @@ public final class EqCrashGuards {
 
     public static String portugueseIbmFixes(String text) {
         if (!ENABLED || text == null || text.isEmpty()) return text == null ? "" : text;
-        return PT_TIME.matcher(text).replaceAll("$1:$2 $3");
+        return rep(PT_TIME, text, "$1:$2 $3");
     }
 
     // ------------------------------------------------------------------
@@ -233,11 +250,11 @@ public final class EqCrashGuards {
 
     public static String frenchIbmFixes(String text) {
         if (!ENABLED || text == null || text.isEmpty()) return text == null ? "" : text;
-        text = FR_CURR_A.matcher(text).replaceAll("$1$2$3");
-        text = FR_CURR_B.matcher(text).replaceAll("$1$2$3");
-        text = FR_QUIL_ANQ.matcher(text).replaceAll("i");
-        text = FR_QUIL.matcher(text).replaceAll("kil");
-        text = FR_DEGREE.matcher(text).replaceAll("num\u00E9ro");
+        text = rep(FR_CURR_A, text, "$1$2$3");
+        text = rep(FR_CURR_B, text, "$1$2$3");
+        text = rep(FR_QUIL_ANQ, text, "i");
+        text = rep(FR_QUIL, text, "kil");
+        text = rep(FR_DEGREE, text, "num\u00E9ro");
         return text;
     }
 
@@ -262,7 +279,7 @@ public final class EqCrashGuards {
     public static String apply(String text, int languageWord) {
         if (!ENABLED) return text == null ? "" : text;
         if (text == null) return "";
-        text = text.replaceAll("\\s+$", "");
+        text = rep(RSTRIP, text, "");
         if (!KEEP_ANNOTATIONS) text = text.replace('`', ' ');
         text = globalFixes(text);
         int family = languageWord & 0xFFFF0000;

@@ -46,6 +46,7 @@ enum {
    published Klatt waveform rather than anything IBM invented.
    Optimized: uses a small lookup table for the parabolic shape to avoid
    per-sample division and multiplication. */
+EVV_HOT
 static void glottal_pulse(klatt_state *k, int32_t at, int32_t count,
                           int32_t period)
 {

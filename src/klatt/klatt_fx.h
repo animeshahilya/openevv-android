@@ -129,7 +129,7 @@ EVV_INLINE void clr_vector(int32_t *v, int32_t n)
 uint32_t klatt_rand(int16_t *out, int32_t n, uint32_t seed) EVV_HOT;
 void     klatt_shape_noise(int16_t *buf, int32_t n, int32_t rate, double *z) EVV_HOT;
 void     klatt_wide_enable(int32_t rate);
-int      klatt_wide_on(void);
+int      klatt_wide_on(void) EVV_HOT;
 int16_t  fxdivl(int32_t num, int32_t den) EVV_HOT;
 void fxmul_vector(const int32_t *__restrict src, int16_t coef, int32_t *__restrict acc, int32_t n) EVV_HOT;
 void fxmul1_vector(const int16_t *__restrict src, int16_t coef, int32_t *__restrict acc, int32_t n) EVV_HOT;

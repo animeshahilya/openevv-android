@@ -81,7 +81,7 @@ public final class EqIndicText {
         StringBuilder sb = null;
         for (int i = 0; i < len; i++) {
             char c = text.charAt(i);
-            char ascii = INDIC_DIGIT_MAP[c];
+            char ascii = c < INDIC_DIGIT_MAP.length ? INDIC_DIGIT_MAP[c] : 0;
             if (ascii != 0) {
                 if (sb == null) {
                     sb = new StringBuilder(len);
@@ -208,8 +208,9 @@ public final class EqIndicText {
         final boolean devanagari = isDevanagariNumberLang(languageTag);
         // Single pass for digit normalization
         text = normalizeIndicDigits(text);
-        // Danda spacing
-        text = DANDA_BOUNDARY.matcher(text).replaceAll("$1 $2");
+        // Danda spacing (guarded: most texts have no danda)
+        if (DANDA_BOUNDARY.matcher(text).find())
+            text = DANDA_BOUNDARY.matcher(text).replaceAll("$1 $2");
         // Banking slashes - single pass with StringBuilder
         Matcher txnMatcher = BANKING_SLASH_TXN.matcher(text);
         if (txnMatcher.find()) {
@@ -243,15 +244,23 @@ public final class EqIndicText {
             numMatcher.appendTail(sb);
             text = sb.toString();
         }
-        // Shorthand replacements - use precomputed replacements
+        // Shorthand replacements - guarded so texts without k/l/cr pay no copy.
+        // (The containsIndianNuanceChars gate above is intentionally broad:
+        // "5k" -> "5 thousand" must also fire on plain English input.)
         if (devanagari) {
-            text = SHORTHAND_THOUSAND.matcher(text).replaceAll(SHORTHAND_THOUSAND_REPL);
-            text = SHORTHAND_LAKH.matcher(text).replaceAll(SHORTHAND_LAKH_REPL);
-            text = SHORTHAND_CRORE.matcher(text).replaceAll(SHORTHAND_CRORE_REPL);
+            if (SHORTHAND_THOUSAND.matcher(text).find())
+                text = SHORTHAND_THOUSAND.matcher(text).replaceAll(SHORTHAND_THOUSAND_REPL);
+            if (SHORTHAND_LAKH.matcher(text).find())
+                text = SHORTHAND_LAKH.matcher(text).replaceAll(SHORTHAND_LAKH_REPL);
+            if (SHORTHAND_CRORE.matcher(text).find())
+                text = SHORTHAND_CRORE.matcher(text).replaceAll(SHORTHAND_CRORE_REPL);
         } else {
-            text = SHORTHAND_THOUSAND.matcher(text).replaceAll(SHORTHAND_THOUSAND_REPL_LATIN);
-            text = SHORTHAND_LAKH.matcher(text).replaceAll(SHORTHAND_LAKH_REPL_LATIN);
-            text = SHORTHAND_CRORE.matcher(text).replaceAll(SHORTHAND_CRORE_REPL_LATIN);
+            if (SHORTHAND_THOUSAND.matcher(text).find())
+                text = SHORTHAND_THOUSAND.matcher(text).replaceAll(SHORTHAND_THOUSAND_REPL_LATIN);
+            if (SHORTHAND_LAKH.matcher(text).find())
+                text = SHORTHAND_LAKH.matcher(text).replaceAll(SHORTHAND_LAKH_REPL_LATIN);
+            if (SHORTHAND_CRORE.matcher(text).find())
+                text = SHORTHAND_CRORE.matcher(text).replaceAll(SHORTHAND_CRORE_REPL_LATIN);
         }
         return text;
     }

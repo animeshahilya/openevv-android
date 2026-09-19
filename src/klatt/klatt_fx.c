@@ -121,6 +121,10 @@ void fxmul_vector(const int32_t *__restrict src, int16_t coef, int32_t *__restri
         int32x4_t v_coef = vdupq_n_s32((int32_t)coef);
 
         for (; i + 3 < n; i += 4) {
+            if (i + 16 < n) {
+                __builtin_prefetch(&src[i + 16], 0, 3);
+                __builtin_prefetch(&acc[i + 16], 0, 3);
+            }
             int32x4_t v_src = vld1q_s32(&src[i]);
             int32x4_t v_acc = vld1q_s32(&acc[i]);
 
@@ -166,6 +170,10 @@ void fxmul1_vector(const int16_t *__restrict src, int16_t coef, int32_t *__restr
         int32x4_t v_coef = vdupq_n_s32((int32_t)coef);
 
         for (; i + 3 < n; i += 4) {
+            if (i + 16 < n) {
+                __builtin_prefetch(&src[i + 16], 0, 3);
+                __builtin_prefetch(&acc[i + 16], 0, 3);
+            }
             /* Load 4 int16_t values and extend to int32_t */
             int16x4_t v_src16 = vld1_s16(&src[i]);
             int32x4_t v_src = vshll_n_s16(v_src16, 4);  /* << 4 */
@@ -788,6 +796,7 @@ static void pole_filter_wide(filter_parms *fp, int32_t *buf, int32_t n)
     fp->d2 = wide_round(y2);
 }
 
+EVV_HOT
 int klatt_wide_on(void)
 {
     return wide_on;
@@ -857,6 +866,8 @@ void pole_filter_neon(filter_parms *fp, int32_t *buf, int32_t n)
 
     /* Process 4 samples per iteration: batch sa*in, then combine with NEON */
     for (; i + 3 < n; i += 4) {
+        if (i + 16 < n)
+            __builtin_prefetch(&buf[i + 16], 0, 3);
         /* Batch all 4 sa*in products */
         int32_t t3_0 = fxmul_scaled(sa, buf[i]);
         int32_t t3_1 = fxmul_scaled(sa, buf[i + 1]);
