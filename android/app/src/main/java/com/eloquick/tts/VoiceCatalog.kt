@@ -244,9 +244,65 @@ fun convertTuningRange(value: Int, from: ClosedFloatingPointRange<Float>, to: Cl
  * whatever the multiplier is.
  */
 /** The engine's actual hard speed ceilings per unit system - applied to
- * whatever the multiplier produces, not specific to any one multiplier. */
+ * whatever the multiplier produces, not specific to any multiplier. */
 const val ENGINE_SPEED_MAX_RAW = 250
 const val ENGINE_SPEED_MAX_WPM = 900
+
+/**
+ * The engine's measured speed curve: raw speed unit -> audio-time ratio
+ * relative to speed 50 (1.0 = same duration as 50, 0.5 = twice as fast).
+ * Measured on-device (Pixel 8, 11025 Hz, en-US) over speeds
+ * 0..250 and verified byte-identical on a second voice, so one table
+ * serves all voices. The curve is strongly non-linear: speed 100 renders
+ * 2.73x (not 2x), 150 renders 6.95x, 200 renders 16.3x, and 225..250
+ * saturate (~20x). A linear percent->speed map (TalkBack 200% -> speed
+ * 100) therefore overshoots badly above ~120%; [applyCallerRate] inverts
+ * this table instead so a caller's percentage means a true rate multiple.
+ */
+private val ENGINE_SPEED_TIME_RATIO = floatArrayOf(
+    // speed: 0, 5, 10, 20, 30, 40, 50
+    2.7126f, 2.4011f, 2.2224f, 1.8137f, 1.4816f, 1.2142f, 1.0f,
+    // speed: 60, 70, 85, 100, 125, 150, 175, 200, 225, 250
+    0.8163f, 0.6656f, 0.5058f, 0.3659f, 0.2283f, 0.1439f, 0.0852f,
+    0.0614f, 0.0505f, 0.0499f,
+)
+private val ENGINE_SPEED_TIME_STEPS = intArrayOf(
+    0, 5, 10, 20, 30, 40, 50, 60, 70, 85, 100, 125, 150, 175, 200, 225, 250,
+)
+
+/** Time ratio for a raw engine speed, piecewise-linear between table points. */
+fun engineTimeRatioForSpeed(speed: Int): Float {
+    val s = speed.coerceIn(0, 250)
+    for (i in 1 until ENGINE_SPEED_TIME_STEPS.size) {
+        if (s <= ENGINE_SPEED_TIME_STEPS[i]) {
+            val s0 = ENGINE_SPEED_TIME_STEPS[i - 1]
+            val s1 = ENGINE_SPEED_TIME_STEPS[i]
+            val t = (s - s0).toFloat() / (s1 - s0)
+            val r0 = ENGINE_SPEED_TIME_RATIO[i - 1]
+            val r1 = ENGINE_SPEED_TIME_RATIO[i]
+            return r0 + t * (r1 - r0)
+        }
+    }
+    return ENGINE_SPEED_TIME_RATIO.last()
+}
+
+/** Raw engine speed for a time ratio, inverting [ENGINE_SPEED_TIME_RATIO].
+ * Out-of-range ratios clamp to the rails (0 = slowest, 250 = fastest). */
+fun engineSpeedForTimeRatio(ratio: Float): Int {
+    if (ratio >= ENGINE_SPEED_TIME_RATIO[0]) return 0
+    if (ratio <= ENGINE_SPEED_TIME_RATIO.last()) return ENGINE_SPEED_MAX_RAW
+    for (i in 1 until ENGINE_SPEED_TIME_RATIO.size) {
+        if (ratio >= ENGINE_SPEED_TIME_RATIO[i]) {
+            val r0 = ENGINE_SPEED_TIME_RATIO[i - 1]
+            val r1 = ENGINE_SPEED_TIME_RATIO[i]
+            val s0 = ENGINE_SPEED_TIME_STEPS[i - 1]
+            val s1 = ENGINE_SPEED_TIME_STEPS[i]
+            val t = (r0 - ratio) / (r0 - r1)
+            return (s0 + t * (s1 - s0)).roundToInt()
+        }
+    }
+    return ENGINE_SPEED_MAX_RAW
+}
 
 fun applyRateBoost(speed: Int, multiplier: Float, realWorldUnits: Boolean): Int {
     if (multiplier <= 1f || speed < 0) return speed
@@ -275,9 +331,19 @@ fun applyRateBoost(speed: Int, multiplier: Float, realWorldUnits: Boolean): Int 
  */
 fun applyCallerRate(value: Int, requestSpeechRate: Int, realWorldUnits: Boolean): Int {
     if (value < 0 || requestSpeechRate <= 0 || requestSpeechRate == 100) return value
-    val range = if (realWorldUnits) SPEED_REAL_WORLD_RANGE else RAW_TUNING_RANGE
-    val scaled = (value * (requestSpeechRate / 100f)).roundToInt()
-    return scaled.coerceIn(range.start.roundToInt(), range.endInclusive.roundToInt())
+    if (realWorldUnits) {
+        val range = SPEED_REAL_WORLD_RANGE
+        val scaled = (value * (requestSpeechRate / 100f)).roundToInt()
+        return scaled.coerceIn(range.start.roundToInt(), range.endInclusive.roundToInt())
+    }
+    // Raw units: the engine's speed curve is strongly non-linear (see
+    // ENGINE_SPEED_TIME_RATIO), so scale in the time domain instead of
+    // multiplying slider units: a caller asking for 200% of speed 50 gets
+    // the speed that renders in half the time (~86), not speed 100 (which
+    // renders 2.73x). Output is engine units up to the engine ceiling -
+    // the only consumer feeds applyRateBoost/engine directly.
+    val target = engineTimeRatioForSpeed(value) * (100f / requestSpeechRate)
+    return engineSpeedForTimeRatio(target).coerceIn(0, ENGINE_SPEED_MAX_RAW)
 }
 
 /** Pitch's counterpart to [applyCallerRate] - same reasoning, same -1 rule,
